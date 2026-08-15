@@ -23,6 +23,7 @@ logs/runtime/
 
 # Local-only legacy agent experiments and generated reports.
 .opencode/
+.symphony/
 logs/autonomous/
 eval/
 eval_2/

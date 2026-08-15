@@ -11,6 +11,9 @@ for command_name in uv python npm git; do
   fi
 done
 
+git config --local rerere.enabled true
+git config --local rerere.autoupdate true
+
 uv sync --frozen
 npm --prefix frontend ci
 mkdir -p state/storage state/runtime logs/runtime
