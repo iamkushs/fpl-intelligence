@@ -13,8 +13,8 @@ from tools.symphony_runner.state import StateStore
 FAKE=Path(__file__).with_name("fake_app_server.py")
 
 
-def config(tmp_path, mode="normal"):
-    value=RunnerConfig("o/r","",codex_command=(sys.executable,str(FAKE),mode),turn_timeout_ms=2000,read_timeout_ms=1000,stall_timeout_ms=200)
+def config(tmp_path, mode="normal", *, size=0, max_message_bytes=16 * 1024 * 1024):
+    value=RunnerConfig("o/r","",codex_command=(sys.executable,str(FAKE),mode,str(size)),turn_timeout_ms=2000,read_timeout_ms=1000,stall_timeout_ms=200,app_server_max_message_bytes=max_message_bytes)
     return value
 
 
@@ -75,3 +75,42 @@ def test_model_and_effort_use_schema_backed_turn_fields(tmp_path):
         try: return await client.run_turn("routed",model="gpt-5.5",effort="medium")
         finally: await client.close()
     assert asyncio.run(run()).status == "completed"
+
+
+@pytest.mark.parametrize("size", [128 * 1024, 1024 * 1024, 5 * 1024 * 1024])
+def test_large_chunked_jsonl_messages_cross_subprocess_pipe(tmp_path, size):
+    async def run():
+        client = CodexAppServer(config(tmp_path, "large", size=size), tmp_path, [], lambda *_: {})
+        try:
+            await client.initialize()
+            return client.process.returncode
+        finally:
+            await client.close()
+    assert asyncio.run(run()) is None
+
+
+def test_large_multibyte_utf8_message_is_decoded_after_assembly(tmp_path):
+    async def run():
+        client = CodexAppServer(config(tmp_path, "large_utf8", size=100_000), tmp_path, [], lambda *_: {})
+        try: await client.initialize()
+        finally: await client.close()
+    asyncio.run(run())
+
+
+def test_oversized_message_is_clear_retryable_and_child_is_cleaned_up(tmp_path):
+    client = None
+    record = RunRecord(5, str(tmp_path), "symphony/gh-5", thread_id="existing-thread",
+                       requested_model_route="5.5", resolved_model_id="gpt-5.5",
+                       productive_failure_count=0)
+    async def run():
+        nonlocal client
+        client = CodexAppServer(config(tmp_path, "large", size=16_000, max_message_bytes=4096), tmp_path, [], lambda *_: {})
+        try: await client.initialize()
+        finally: await client.close()
+    with pytest.raises(AppServerError, match="Codex App Server message exceeded configured 4096 bytes limit") as raised:
+        asyncio.run(run())
+    assert raised.value.retryable is True
+    assert client is not None and client.process is None
+    assert record.thread_id == "existing-thread"
+    assert record.requested_model_route == "5.5" and record.resolved_model_id == "gpt-5.5"
+    assert record.productive_failure_count == 0 and record.escalation_level == 0

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import RunnerConfig
-from .models import AppServerError, AppServerTimeout, TurnResult
+from .models import AppServerError, AppServerMessageTooLarge, AppServerTimeout, TurnResult
 from .routing import CatalogModel, ModelCatalog
 
 ToolHandler = Callable[[str, dict[str, Any]], Any]
@@ -60,6 +60,7 @@ class CodexAppServer:
         command = executable_command(self.config.codex_command)
         self.process = await asyncio.create_subprocess_exec(*command, cwd=self.cwd, env=env,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            limit=self.config.app_server_max_message_bytes,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
 
     async def initialize(self) -> None:
@@ -88,8 +89,12 @@ class CodexAppServer:
 
     async def _read(self, timeout: float) -> dict[str, Any]:
         if not self.process or not self.process.stdout: raise AppServerError("App Server is not running")
-        try: line = await asyncio.wait_for(self.process.stdout.readline(), timeout)
+        try: line = await asyncio.wait_for(self.process.stdout.readuntil(b"\n"), timeout)
         except TimeoutError as exc: raise AppServerTimeout("Codex App Server stalled") from exc
+        except asyncio.LimitOverrunError as exc:
+            raise AppServerMessageTooLarge(self.config.app_server_max_message_bytes, exc.consumed) from exc
+        except asyncio.IncompleteReadError as exc:
+            line = exc.partial
         if not line:
             detail = ""
             if self.process.stderr: detail = (await self.process.stderr.read()).decode(errors="replace")[-500:]

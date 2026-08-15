@@ -90,5 +90,14 @@ class AppServerTimeout(AppServerError):
     pass
 
 
+class AppServerMessageTooLarge(AppServerError):
+    def __init__(self, limit: int, observed: int):
+        self.limit = limit
+        self.observed = observed
+        limit_mib = limit / (1024 * 1024)
+        display_limit = f"{limit_mib:g} MiB" if limit_mib >= 1 else f"{limit} byte{'s' if limit != 1 else ''}"
+        super().__init__(f"Codex App Server message exceeded configured {display_limit} limit")
+
+
 class ConfigurationError(RunnerError):
     pass

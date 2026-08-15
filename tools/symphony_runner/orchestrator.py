@@ -12,7 +12,7 @@ from .app_server import CodexAppServer
 from .config import RunnerConfig
 from .github import GitHubClient
 from .logging import StructuredLogger
-from .models import ConfigurationError, Issue, RunRecord, RetryableError, RunnerError, utc_now
+from .models import AppServerMessageTooLarge, ConfigurationError, Issue, RunRecord, RetryableError, RunnerError, utc_now
 from .state import StateStore
 from .status_server import StatusServer
 from .workflow import render_prompt
@@ -140,7 +140,9 @@ class Orchestrator:
                 record.status = "retrying"
                 delay_ms = min(self.config.max_retry_backoff_ms, 1000 * (2 ** min(record.attempt, 8)))
                 record.retry_at = time.time() + (delay_ms / 1000) * random.uniform(0.75, 1.25)
-                self.logger.event("issue_retry", issue=issue.number, attempt=record.attempt, retry_at=record.retry_at, error=record.last_error)
+                metadata = {"configured_limit": exc.limit, "observed_size": exc.observed} if isinstance(exc, AppServerMessageTooLarge) else {}
+                self.logger.event("issue_retry", issue=issue.number, attempt=record.attempt, retry_at=record.retry_at,
+                                  thread_id=record.thread_id, turn_id=record.turn_id, error=record.last_error, **metadata)
         finally:
             await client.close(); record.last_activity = utc_now(); self.store.save()
 

@@ -9,6 +9,7 @@ from typing import Any
 from .models import ConfigurationError, RunnerPaths
 
 ENV_REF = re.compile(r"^\$([A-Za-z_][A-Za-z0-9_]*)$")
+APP_SERVER_MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 
 
 def resolve_env(value: Any, *, secrets: set[str] | None = None) -> Any:
@@ -47,6 +48,7 @@ class RunnerConfig:
     turn_timeout_ms: int = 3_600_000
     read_timeout_ms: int = 5_000
     stall_timeout_ms: int = 300_000
+    app_server_max_message_bytes: int = APP_SERVER_MAX_MESSAGE_BYTES
     hooks: dict[str, Any] = field(default_factory=dict)
     prompt: str = ""
     secret_environment_names: set[str] = field(default_factory=set)
@@ -98,6 +100,7 @@ class RunnerConfig:
             turn_timeout_ms=int(codex.get("turn_timeout_ms", 3_600_000)),
             read_timeout_ms=int(codex.get("read_timeout_ms", 5_000)),
             stall_timeout_ms=int(codex.get("stall_timeout_ms", 300_000)),
+            app_server_max_message_bytes=int(codex.get("max_message_bytes", APP_SERVER_MAX_MESSAGE_BYTES)),
             hooks=dict(resolved.get("hooks", {})), prompt=prompt, secret_environment_names=secret_names, paths=paths,
             status_host=str(server.get("host", "127.0.0.1")), status_port=int(server.get("port", 4000)),
             model_policy_path=(workflow_path.parent / str(resolved.get("models", {}).get("policy", "tooling/symphony-models.json"))).resolve(),
@@ -108,6 +111,8 @@ class RunnerConfig:
     def validate(self) -> None:
         if self.max_concurrent_agents <= 0 or self.max_turns <= 0 or self.poll_interval_ms <= 0:
             raise ConfigurationError("polling and agent limits must be positive")
+        if self.app_server_max_message_bytes <= 0:
+            raise ConfigurationError("codex.max_message_bytes must be positive")
         if self.thread_sandbox != "workspace-write" or self.approval_policy != "never":
             raise ConfigurationError("Windows runner requires approval_policy=never and workspace-write sandbox")
         if self.status_host != "127.0.0.1":

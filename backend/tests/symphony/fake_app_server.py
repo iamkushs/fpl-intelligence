@@ -1,15 +1,23 @@
 import json
+import os
 import sys
 import time
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "normal"
+size = int(sys.argv[2]) if len(sys.argv) > 2 else 0
 thread = "thread-fake"
 for line in sys.stdin:
     message = json.loads(line)
     method = message.get("method")
     if mode == "malformed": print("not-json", flush=True); mode = "normal"; continue
     if mode == "exit": sys.exit(3)
-    if method == "initialize": print(json.dumps({"id": message["id"], "result": {"platformOs": "windows"}}), flush=True)
+    if method == "initialize":
+        response = json.dumps({"id": message["id"], "result": {"platformOs": "windows", "payload": ("🙂" if mode == "large_utf8" else "x") * size}}, ensure_ascii=False).encode() + b"\n"
+        if mode in {"large", "large_utf8"}:
+            for offset in range(0, len(response), 7919):
+                os.write(sys.stdout.fileno(), response[offset:offset + 7919])
+        else:
+            os.write(sys.stdout.fileno(), response)
     elif method == "initialized": pass
     elif method == "model/list":
         def item(name, efforts): return {"id": name, "model": name, "displayName": name, "description": "", "hidden": False, "isDefault": name == "gpt-5.5", "defaultReasoningEffort": efforts[0], "supportedReasoningEfforts": [{"reasoningEffort": effort, "description": ""} for effort in efforts]}
