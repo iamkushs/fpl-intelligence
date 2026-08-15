@@ -17,6 +17,7 @@ from .state import StateStore
 from .status_server import StatusServer
 from .workflow import render_prompt
 from .workspace import HostGitLifecycle, Workspace, WorkspaceManager
+from .routing import ModelRouter
 
 
 class Orchestrator:
@@ -85,9 +86,25 @@ class Orchestrator:
         def persist_turn(value: str) -> None:
             record.turn_id = value; record.last_activity = utc_now(); self.store.save()
         try:
+            catalog = await client.model_catalog()
+            router = ModelRouter.load(catalog, self.config.model_policy_path)
+            route, reason = router.reconcile(issue, record)
+            resolved = router.resolve(route)
+            record.resolved_model_id = resolved.model.id; record.reasoning_effort = resolved.effort
+            record.routing_reason = reason + (f"; effort fell back to {resolved.effort}" if resolved.effort_fallback else "")
+            self.store.save()
+            routing = ("\n\n### Model Routing\n\n"
+                f"Initial model: {record.requested_model_route}\n\nCurrent model: {route}\n\n"
+                f"Actual model ID: `{resolved.model.id}`\n\nEffort: {resolved.effort}\n\n"
+                f"Routing reason: {record.routing_reason}\n\nEscalations: {record.escalation_level}\n")
+            base = workpad.body.split("\n\n### Model Routing", 1)[0]
+            workpad = self.github.update_workpad(workpad.comment_id, base.rstrip() + routing)
+            self.logger.event("model_route", issue=issue.number, route=route, model=resolved.model.id,
+                              effort=resolved.effort, escalation_level=record.escalation_level)
             for turn_number in range(self.config.max_turns):
                 result = await client.run_turn(prompt if turn_number == 0 else "Resume from the existing workspace and Codex Workpad. Complete only remaining acceptance criteria and request host handoff.",
-                                               record.thread_id, on_thread=persist_thread, on_turn=persist_turn)
+                                               record.thread_id, model=resolved.model.id, effort=resolved.effort,
+                                               on_thread=persist_thread, on_turn=persist_turn)
                 record.thread_id, record.turn_id = result.thread_id, None
                 record.last_activity = utc_now(); self.store.save()
                 current = self.github.get_issue(issue.number); labels = set(current.labels)
@@ -103,7 +120,8 @@ class Orchestrator:
                     record.status = "blocked"; break
                 if not self.eligible(current): record.status = "ineligible"; break
             else:
-                raise RetryableError("Maximum Codex turns reached while issue remains eligible")
+                router.record_productive_failure(record)
+                raise RetryableError("Productive implementation attempt exhausted its turn budget while issue remains eligible")
             self.logger.event("issue_handoff", issue=issue.number, status=record.status, thread_id=record.thread_id)
         except asyncio.CancelledError:
             record.status = "ineligible"; record.last_activity = utc_now(); self.store.save(); raise
@@ -112,6 +130,11 @@ class Orchestrator:
             deterministic = isinstance(exc, ConfigurationError) or (isinstance(exc, RunnerError) and not exc.retryable)
             if deterministic:
                 record.status = "failed"; record.retry_at = None
+                if isinstance(exc, ConfigurationError) and "conflicting model labels" in str(exc):
+                    body = workpad.body.rstrip() + f"\n\nModel routing configuration error: {record.last_error}\n"
+                    self.github.update_workpad(workpad.comment_id, body)
+                    self.github.remove_label(issue.number, "symphony"); self.github.add_label(issue.number, "symphony-blocked")
+                    record.status = "blocked"
                 self.logger.event("issue_failed", issue=issue.number, error=record.last_error)
             else:
                 record.status = "retrying"

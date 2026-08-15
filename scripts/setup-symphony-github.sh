@@ -19,4 +19,8 @@ repo="${1:-$default_repo}"
 gh label create symphony --repo "$repo" --color 1D76DB --description "Eligible for autonomous Symphony implementation" --force
 gh label create symphony-review --repo "$repo" --color 0E8A16 --description "Implementation complete; awaiting human review" --force
 gh label create symphony-blocked --repo "$repo" --color D93F0B --description "External blocker requires human action" --force
+gh label create model-5.5 --repo "$repo" --color C5DEF5 --description "Route Symphony work to GPT-5.5" --force
+gh label create model-luna --repo "$repo" --color C5DEF5 --description "Route Symphony work to Luna" --force
+gh label create model-terra --repo "$repo" --color C5DEF5 --description "Route Symphony work to Terra" --force
+gh label create model-sol --repo "$repo" --color C5DEF5 --description "Route Symphony work to Sol" --force
 echo "Symphony labels are ready in $repo."

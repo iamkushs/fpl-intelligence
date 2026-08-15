@@ -67,3 +67,11 @@ def test_resume_reports_existing_thread_immediately(tmp_path):
         finally: await client.close()
     result=asyncio.run(run())
     assert result.thread_id == "durable-thread" and seen == ["durable-thread"]
+
+
+def test_model_and_effort_use_schema_backed_turn_fields(tmp_path):
+    async def run():
+        client=CodexAppServer(config(tmp_path,"validate_model"),tmp_path,[],lambda *_:{})
+        try: return await client.run_turn("routed",model="gpt-5.5",effort="medium")
+        finally: await client.close()
+    assert asyncio.run(run()).status == "completed"

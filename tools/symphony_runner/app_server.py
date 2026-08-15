@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from .config import RunnerConfig
 from .models import AppServerError, AppServerTimeout, TurnResult
+from .routing import CatalogModel, ModelCatalog
 
 ToolHandler = Callable[[str, dict[str, Any]], Any]
 StateHandler = Callable[[str], None]
@@ -36,6 +37,7 @@ class CodexAppServer:
         self._next_id = 1
         self._initialized = False
         self._active_thread_id: str | None = None
+        self._catalog: ModelCatalog | None = None
 
     @staticmethod
     def version() -> str:
@@ -48,7 +50,7 @@ class CodexAppServer:
             raise AppServerError("codex executable not found")
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run(executable_command(["codex", "app-server", "generate-json-schema", "--experimental", "--out", directory]), capture_output=True, text=True)
-            required = [Path(directory) / "v2" / "ThreadStartParams.json", Path(directory) / "v2" / "TurnStartParams.json", Path(directory) / "DynamicToolCallParams.json"]
+            required = [Path(directory) / "v2" / "ThreadStartParams.json", Path(directory) / "v2" / "TurnStartParams.json", Path(directory) / "v2" / "ModelListResponse.json", Path(directory) / "DynamicToolCallParams.json"]
             if result.returncode or not all(path.is_file() for path in required):
                 raise AppServerError("installed Codex App Server schema is incompatible")
         return CodexAppServer.version()
@@ -59,6 +61,25 @@ class CodexAppServer:
         self.process = await asyncio.create_subprocess_exec(*command, cwd=self.cwd, env=env,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+
+    async def initialize(self) -> None:
+        if not self.process: await self.start()
+        if not self._initialized:
+            await self._request("initialize", {"clientInfo": {"name": "fpl_symphony_windows", "title": "FPL Symphony Windows Runner", "version": "0.1.0"}, "capabilities": {"experimentalApi": True}})
+            await self._send({"method": "initialized", "params": {}}); self._initialized = True
+
+    async def model_catalog(self) -> ModelCatalog:
+        await self.initialize()
+        if self._catalog is not None: return self._catalog
+        values: list[CatalogModel] = []; cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {"includeHidden": True}
+            if cursor: params["cursor"] = cursor
+            page = await self._request("model/list", params)
+            values.extend(CatalogModel.from_api(value) for value in page.get("data", []))
+            cursor = page.get("nextCursor")
+            if not cursor: break
+        self._catalog = ModelCatalog(values); return self._catalog
 
     async def _send(self, message: dict[str, Any]) -> None:
         if not self.process or not self.process.stdin: raise AppServerError("App Server is not running")
@@ -100,13 +121,10 @@ class CodexAppServer:
         await self._send({"id": message["id"], "result": result})
         return True
 
-    async def run_turn(self, prompt: str, thread_id: str | None = None, *,
+    async def run_turn(self, prompt: str, thread_id: str | None = None, *, model: str | None = None,
+                       effort: str | None = None,
                        on_thread: StateHandler | None = None, on_turn: StateHandler | None = None) -> TurnResult:
-        if not self.process: await self.start()
-        if not self._initialized:
-            await self._request("initialize", {"clientInfo": {"name": "fpl_symphony_windows", "title": "FPL Symphony Windows Runner", "version": "0.1.0"}, "capabilities": {"experimentalApi": True}})
-            await self._send({"method": "initialized", "params": {}})
-            self._initialized = True
+        await self.initialize()
         common = {"cwd": str(self.cwd), "approvalPolicy": self.config.approval_policy, "sandbox": self.config.thread_sandbox,
             "runtimeWorkspaceRoots": [str(self.cwd)]}
         if thread_id and thread_id == self._active_thread_id:
@@ -115,7 +133,8 @@ class CodexAppServer:
             try: response = await self._request("thread/resume", {"threadId": thread_id, **common})
             except AppServerError: thread_id = None
         if not thread_id:
-            response = await self._request("thread/start", {**common, "dynamicTools": self.tools})
+            response = await self._request("thread/start", {**common, "dynamicTools": self.tools, "model": model,
+                "allowProviderModelFallback": False})
         thread = response.get("thread", response)
         thread_id = str(thread.get("id") or thread.get("threadId") or "")
         if not thread_id: raise AppServerError("thread response did not contain an id")
@@ -123,6 +142,7 @@ class CodexAppServer:
         if on_thread:
             on_thread(thread_id)
         turn = await self._request("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}],
+            "model": model, "effort": effort,
             "cwd": str(self.cwd), "approvalPolicy": self.config.approval_policy, "sandboxPolicy": {**self.config.sandbox_policy, "writableRoots": [str(self.cwd)]},
             "runtimeWorkspaceRoots": [str(self.cwd)]})
         turn_value = turn.get("turn", turn); turn_id = str(turn_value.get("id") or turn_value.get("turnId") or "")
@@ -158,7 +178,7 @@ class CodexAppServer:
             except TimeoutError: process.kill(); await process.wait()
         if process.stdout: await process.stdout.read()
         if process.stderr: await process.stderr.read()
-        self.process = None; self._initialized = False; self._active_thread_id = None
+        self.process = None; self._initialized = False; self._active_thread_id = None; self._catalog = None
 
     async def __aenter__(self) -> CodexAppServer: await self.start(); return self
     async def __aexit__(self, *_: object) -> None: await self.close()

@@ -18,7 +18,7 @@ from .workspace import WorkspaceManager
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="fpl-symphony", description="Windows-native Symphony runner for FPL Intelligence")
     sub = root.add_subparsers(dest="command", required=True)
-    for name in ("run", "validate"):
+    for name in ("run", "validate", "models"):
         command = sub.add_parser(name); command.add_argument("workflow", nargs="?", default="WORKFLOW.md")
     sub.add_parser("status")
     smoke = sub.add_parser("smoke-test"); smoke.add_argument("workflow", nargs="?", default="WORKFLOW.md"); smoke.add_argument("--live-codex", action="store_true")
@@ -37,6 +37,22 @@ async def live_codex(config: object) -> None:
     finally: await client.close()
 
 
+async def print_models(config: object) -> None:
+    from .config import RunnerConfig
+    from .routing import ModelRouter, ROUTES
+    assert isinstance(config, RunnerConfig); assert config.paths
+    client = CodexAppServer(config, config.paths.root, [], lambda *_: None)
+    try:
+        catalog = await client.model_catalog(); router = ModelRouter.load(catalog, config.model_policy_path)
+        print(f"{'Logical':<12}{'Resolved model':<36}Effort / supported")
+        for route in ROUTES:
+            try:
+                result = router.resolve(route)
+                print(f"{route:<12}{result.model.id:<36}{result.effort} / {', '.join(result.model.efforts)}")
+            except Exception as exc: print(f"{route:<12}{'UNAVAILABLE':<36}{exc}")
+    finally: await client.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if args.command == "status":
@@ -45,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({str(k): v.to_dict() for k, v in store.records.items()}, indent=2)); return 0
     config = load_workflow(Path(getattr(args, "workflow", "WORKFLOW.md")))
     assert config.paths
+    if args.command == "models":
+        asyncio.run(print_models(config)); return 0
     if args.command in {"validate", "smoke-test"}:
         version = CodexAppServer.validate_schema()
         print(f"Workflow valid for {config.repository}; {version}; workspace={config.paths.workspaces}")

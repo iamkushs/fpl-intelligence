@@ -53,6 +53,7 @@ class RunnerConfig:
     paths: RunnerPaths | None = None
     status_host: str = "127.0.0.1"
     status_port: int = 4000
+    model_policy_path: Path = Path("tooling/symphony-models.json")
 
     @classmethod
     def from_mapping(cls, raw: dict[str, Any], prompt: str, workflow_path: Path) -> RunnerConfig:
@@ -99,6 +100,7 @@ class RunnerConfig:
             stall_timeout_ms=int(codex.get("stall_timeout_ms", 300_000)),
             hooks=dict(resolved.get("hooks", {})), prompt=prompt, secret_environment_names=secret_names, paths=paths,
             status_host=str(server.get("host", "127.0.0.1")), status_port=int(server.get("port", 4000)),
+            model_policy_path=(workflow_path.parent / str(resolved.get("models", {}).get("policy", "tooling/symphony-models.json"))).resolve(),
         )
         config.validate()
         return config

@@ -1,0 +1,10 @@
+{
+  "defaultRoute": "5.5",
+  "routes": {
+    "luna": { "preferredEffort": "medium", "productiveFailureBudget": 1 },
+    "5.5": { "preferredEffort": "medium", "productiveFailureBudget": 2 },
+    "terra": { "preferredEffort": "high", "productiveFailureBudget": 2 },
+    "sol": { "preferredEffort": "high", "productiveFailureBudget": 0 }
+  },
+  "escalationSequence": ["luna", "5.5", "terra", "sol"]
+}

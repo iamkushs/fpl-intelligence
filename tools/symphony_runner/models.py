@@ -40,6 +40,13 @@ class RunRecord:
     retry_at: float | None = None
     last_error: str | None = None
     last_activity: str = field(default_factory=utc_now)
+    requested_model_route: str | None = None
+    resolved_model_id: str | None = None
+    reasoning_effort: str | None = None
+    routing_reason: str | None = None
+    escalation_level: int = 0
+    productive_failure_count: int = 0
+    previous_routes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

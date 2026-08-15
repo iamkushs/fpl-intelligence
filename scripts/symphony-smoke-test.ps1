@@ -1,4 +1,4 @@
-param([int]$TimeoutSeconds = 3600, [switch]$RecordRuntime)
+param([int]$TimeoutSeconds = 3600, [switch]$RecordRuntime, [ValidateSet('5.5','luna','terra','sol')][string]$ModelRoute = '5.5')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
@@ -17,7 +17,7 @@ $dataRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'FPLSymphony' }
 $lockPath = Join-Path $dataRoot 'runner.lock'
 $existingRunner = Test-SymphonyCompatibleRunner -Repository $repo -LockPath $lockPath
 $body = 'Opt-in Windows Symphony smoke test. Do not modify product behavior. Use one ## Codex Workpad. Change only tooling/symphony-smoke.env so SMOKE_TEST_SEQUENCE equals this issue number; run .\scripts\verify-all.ps1; review the diff; record successful verification and HOST HANDOFF READY in the Workpad; let the host runner sync, commit, push, create a PR, and transition labels; keep the issue open; do not merge.'
-$issueUrl = gh issue create --repo $repo --title 'Windows Symphony smoke test: harmless handoff' --label symphony --body $body
+$issueUrl = gh issue create --repo $repo --title 'Windows Symphony smoke test: harmless handoff' --label symphony --label "model-$ModelRoute" --body $body
 $issueNumber = [int]($issueUrl -split '/')[-1]
 Write-Host "Created $issueUrl"
 
@@ -40,7 +40,8 @@ try {
         $workspaceRoot = $env:SYMPHONY_WORKSPACE_ROOT
         if (-not $workspaceRoot) { $workspaceRoot = Join-Path $env:LOCALAPPDATA 'FPLSymphony/workspaces' }
         $workspace = Join-Path $workspaceRoot "GH-$issueNumber"
-        if ($labels -contains 'symphony-review' -and $labels -notcontains 'symphony' -and $workpads.Count -eq 1 -and $prs.Count -gt 0 -and (Test-Path $workspace)) {
+        $routingSeen = $workpads.Count -eq 1 -and $workpads[0].body -match "Current model: $([regex]::Escape($ModelRoute))" -and $workpads[0].body -match 'Actual model ID:'
+        if ($labels -contains 'symphony-review' -and $labels -notcontains 'symphony' -and $routingSeen -and $prs.Count -gt 0 -and (Test-Path $workspace)) {
             & "$PSScriptRoot/verify-markdown.ps1"
             Write-Host "Windows Symphony smoke test passed: $($prs[0].url)"
             if ($RecordRuntime) {
