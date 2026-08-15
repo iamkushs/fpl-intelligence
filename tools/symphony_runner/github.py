@@ -30,7 +30,18 @@ class GitHubClient:
         if result.returncode:
             message = (result.stderr or result.stdout).strip()
             raise RetryableError(f"GitHub operation failed: {message[:500]}")
+        if not isinstance(result.stdout, str):
+            raise RetryableError("GitHub CLI returned no stdout value")
         return result.stdout
+
+    @staticmethod
+    def _decode(raw: str, operation: str) -> Any:
+        if not isinstance(raw, str):
+            raise RetryableError(f"GitHub {operation} returned no JSON text")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RetryableError(f"GitHub {operation} returned malformed JSON") from exc
 
     @staticmethod
     def _issue(value: dict[str, Any]) -> Issue:
@@ -44,15 +55,15 @@ class GitHubClient:
             "--json", "number,title,body,labels,state,url,createdAt,updatedAt"]
         for label in labels:
             args.extend(["--label", label])
-        return [self._issue(value) for value in json.loads(self._gh(*args)) if not value.get("isPullRequest")]
+        return [self._issue(value) for value in self._decode(self._gh(*args), "issue list") if not value.get("isPullRequest")]
 
     def get_issue(self, number: int) -> Issue:
         raw = self._gh("issue", "view", str(number), "--repo", self.repository,
             "--json", "number,title,body,labels,state,url,createdAt,updatedAt")
-        return self._issue(json.loads(raw))
+        return self._issue(self._decode(raw, "issue view"))
 
     def comments(self, number: int) -> list[dict[str, Any]]:
-        return json.loads(self._gh("api", f"repos/{self.repository}/issues/{number}/comments"))
+        return self._decode(self._gh("api", f"repos/{self.repository}/issues/{number}/comments"), "comments")
 
     def find_workpad(self, number: int) -> Workpad | None:
         matches = [value for value in self.comments(number) if str(value.get("body", "")).startswith("## Codex Workpad")]
@@ -68,13 +79,13 @@ class GitHubClient:
         if existing:
             return existing
         body = "## Codex Workpad\n\n### Plan\n\n### Acceptance Criteria\n\n### Validation\n\n### State / Progress\n\n### Notes\n\n### Blockers\n"
-        payload = json.loads(self._gh("api", f"repos/{self.repository}/issues/{issue.number}/comments", "-f", f"body={body}"))
+        payload = self._decode(self._gh("api", f"repos/{self.repository}/issues/{issue.number}/comments", "-f", f"body={body}"), "create comment")
         return Workpad(int(payload["id"]), body)
 
     def update_workpad(self, comment_id: int, body: str) -> Workpad:
         if not body.startswith("## Codex Workpad"):
             raise ValueError("Workpad updates must preserve the ## Codex Workpad marker")
-        payload = json.loads(self._gh("api", "--method", "PATCH", f"repos/{self.repository}/issues/comments/{comment_id}", "-f", f"body={body}"))
+        payload = self._decode(self._gh("api", "--method", "PATCH", f"repos/{self.repository}/issues/comments/{comment_id}", "-f", f"body={body}"), "update comment")
         return Workpad(int(payload["id"]), payload["body"])
 
     def add_label(self, number: int, label: str) -> None:
@@ -84,7 +95,7 @@ class GitHubClient:
         self._gh("issue", "edit", str(number), "--repo", self.repository, "--remove-label", label)
 
     def pr_for_branch(self, branch: str) -> dict[str, Any] | None:
-        values = json.loads(self._gh("pr", "list", "--repo", self.repository, "--head", branch, "--state", "open", "--json", "number,url,title,body"))
+        values = self._decode(self._gh("pr", "list", "--repo", self.repository, "--head", branch, "--state", "open", "--json", "number,url,title,body"), "PR list")
         return values[0] if values else None
 
     def create_pr(self, branch: str, title: str, body: str) -> dict[str, Any]:

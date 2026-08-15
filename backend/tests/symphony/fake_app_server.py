@@ -29,6 +29,8 @@ for line in sys.stdin:
         print(json.dumps({"id": message["id"], "result": {"data": data, "nextCursor": next_cursor}}), flush=True)
     elif method == "thread/start": print(json.dumps({"id": message["id"], "result": {"thread": {"id": thread}}}), flush=True)
     elif method == "thread/resume":
+        if mode == "resume_not_found":
+            print(json.dumps({"id": message["id"], "error": {"code": -32602, "message": "thread not found"}}), flush=True); continue
         thread = message["params"]["threadId"]
         print(json.dumps({"id": message["id"], "result": {"thread": {"id": thread}}}), flush=True)
     elif method == "turn/start":
@@ -37,6 +39,10 @@ for line in sys.stdin:
         print(json.dumps({"id": message["id"], "result": {"turn": {"id": "turn-fake"}}}), flush=True)
         if mode == "crash_after_turn": sys.exit(4)
         if mode == "stall": time.sleep(10); continue
-        print(json.dumps({"id": 900, "method": "item/tool/call", "params": {"tool": "read_issue", "arguments": {"issue_number": 1}, "callId": "c", "threadId": thread, "turnId": "turn-fake"}}), flush=True)
+        arguments = None if mode == "missing_arguments" else {"issue_number": 1, "filters": ["open"]}
+        print(json.dumps({"id": 900, "method": "item/tool/call", "params": {"tool": "read_issue", "arguments": arguments, "callId": "c", "threadId": thread, "turnId": "turn-fake"}}), flush=True)
     elif message.get("id") == 900:
-        print(json.dumps({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": "turn-fake", "status": "completed"}}}), flush=True)
+        status = "failed" if mode == "failed" else "interrupted" if mode == "interrupted" else "completed"
+        text = None if mode == "null_agent" else "HOST HANDOFF READY"
+        turn = {"id": "turn-fake", "status": status, "items": [{"type": "agentMessage", "id": "agent-1", "text": text}], "error": {"message": "boom"} if status == "failed" else None}
+        print(json.dumps({"method": "turn/completed", "params": {"threadId": thread, "turn": turn}}), flush=True)

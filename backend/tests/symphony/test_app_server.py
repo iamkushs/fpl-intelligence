@@ -4,9 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from tools.symphony_runner.app_server import CodexAppServer
+from tools.symphony_runner.app_server import CodexAppServer, decode_json_message
 from tools.symphony_runner.config import RunnerConfig
-from tools.symphony_runner.models import AppServerError, AppServerTimeout
+from tools.symphony_runner.models import (AppServerError, AppServerProtocolError,
+    AppServerThreadUnavailable, AppServerTimeout, AppServerTurnFailed,
+    AppServerTurnInterrupted)
 from tools.symphony_runner.models import RunRecord
 from tools.symphony_runner.state import StateStore
 
@@ -14,7 +16,7 @@ FAKE=Path(__file__).with_name("fake_app_server.py")
 
 
 def config(tmp_path, mode="normal", *, size=0, max_message_bytes=16 * 1024 * 1024):
-    value=RunnerConfig("o/r","",codex_command=(sys.executable,str(FAKE),mode,str(size)),turn_timeout_ms=2000,read_timeout_ms=1000,stall_timeout_ms=200,app_server_max_message_bytes=max_message_bytes)
+    value=RunnerConfig("o/r","",codex_command=(sys.executable,str(FAKE),mode,str(size)),turn_timeout_ms=10000,read_timeout_ms=5000,stall_timeout_ms=2000,app_server_max_message_bytes=max_message_bytes)
     return value
 
 
@@ -28,6 +30,7 @@ def test_handshake_dynamic_tool_and_resume(tmp_path):
         finally: await client.close()
     first,second=asyncio.run(run())
     assert first.status=="completed" and second.thread_id==first.thread_id and len(calls)==2
+    assert calls[0][1] == {"issue_number": 1, "filters": ["open"]}
 
 
 @pytest.mark.parametrize("mode,error",[("malformed",AppServerError),("exit",AppServerError),("stall",AppServerTimeout)])
@@ -114,3 +117,38 @@ def test_oversized_message_is_clear_retryable_and_child_is_cleaned_up(tmp_path):
     assert record.thread_id == "existing-thread"
     assert record.requested_model_route == "5.5" and record.resolved_model_id == "gpt-5.5"
     assert record.productive_failure_count == 0 and record.escalation_level == 0
+
+
+@pytest.mark.parametrize("payload", [{}, [], None])
+def test_json_boundary_never_decodes_already_decoded_or_null_values(payload):
+    with pytest.raises(AppServerProtocolError, match="must be bytes or string"):
+        decode_json_message(payload)
+
+
+def test_json_boundary_decodes_bytes_and_string_once():
+    assert decode_json_message(b'{"result":{"nested":[1]}}')["result"] == {"nested": [1]}
+    assert decode_json_message('{"result":null}')["result"] is None
+
+
+@pytest.mark.parametrize("mode,error,pattern", [
+    ("failed", AppServerTurnFailed, "turn failed"),
+    ("interrupted", AppServerTurnInterrupted, "turn interrupted"),
+    ("null_agent", AppServerProtocolError, "no non-null agent output"),
+    ("missing_arguments", AppServerProtocolError, "params.arguments must be an object"),
+])
+def test_terminal_and_tool_schema_classifications(tmp_path, mode, error, pattern):
+    async def run():
+        client = CodexAppServer(config(tmp_path, mode), tmp_path, [], lambda *_: {})
+        try: await client.run_turn("hello")
+        finally: await client.close()
+    with pytest.raises(error, match=pattern):
+        asyncio.run(run())
+
+
+def test_invalid_persisted_thread_is_rotation_eligible(tmp_path):
+    async def run():
+        client = CodexAppServer(config(tmp_path, "resume_not_found"), tmp_path, [], lambda *_: {})
+        try: await client.run_turn("hello", "old-thread")
+        finally: await client.close()
+    with pytest.raises(AppServerThreadUnavailable, match="cannot be resumed"):
+        asyncio.run(run())

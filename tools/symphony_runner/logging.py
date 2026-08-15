@@ -3,9 +3,18 @@ from __future__ import annotations
 import json
 import logging
 import re
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+def exception_location(exc: BaseException) -> str | None:
+    """Return only a safe code location, never exception arguments or payloads."""
+    frames = traceback.extract_tb(exc.__traceback__)
+    runner_frames = [frame for frame in frames if "symphony_runner" in frame.filename]
+    frame = (runner_frames or frames)[-1] if frames else None
+    return f"{Path(frame.filename).name}:{frame.lineno} in {frame.name}" if frame else None
 
 
 class StructuredLogger:

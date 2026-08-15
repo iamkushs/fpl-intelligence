@@ -56,6 +56,10 @@ class RunnerConfig:
     status_host: str = "127.0.0.1"
     status_port: int = 4000
     model_policy_path: Path = Path("tooling/symphony-models.json")
+    max_incident_repairs: int = 3
+    max_issue_repairs: int = 9
+    reviewer_routes: tuple[str, ...] = ("5.5", "terra", "sol")
+    rescue_timeout_ms: int = 900_000
 
     @classmethod
     def from_mapping(cls, raw: dict[str, Any], prompt: str, workflow_path: Path) -> RunnerConfig:
@@ -84,6 +88,7 @@ class RunnerConfig:
         agent = resolved.get("agent", {})
         polling = resolved.get("polling", {})
         server = resolved.get("server", {})
+        recovery = resolved.get("recovery", {})
         config = cls(
             repository=repository,
             tracker_token=token,
@@ -104,6 +109,10 @@ class RunnerConfig:
             hooks=dict(resolved.get("hooks", {})), prompt=prompt, secret_environment_names=secret_names, paths=paths,
             status_host=str(server.get("host", "127.0.0.1")), status_port=int(server.get("port", 4000)),
             model_policy_path=(workflow_path.parent / str(resolved.get("models", {}).get("policy", "tooling/symphony-models.json"))).resolve(),
+            max_incident_repairs=int(recovery.get("max_incident_repairs", 3)),
+            max_issue_repairs=int(recovery.get("max_issue_repairs", 9)),
+            reviewer_routes=tuple(recovery.get("reviewer_routes", ["5.5", "terra", "sol"])),
+            rescue_timeout_ms=int(recovery.get("rescue_timeout_ms", 900_000)),
         )
         config.validate()
         return config
@@ -113,6 +122,10 @@ class RunnerConfig:
             raise ConfigurationError("polling and agent limits must be positive")
         if self.app_server_max_message_bytes <= 0:
             raise ConfigurationError("codex.max_message_bytes must be positive")
+        if self.max_incident_repairs <= 0 or self.max_issue_repairs <= 0:
+            raise ConfigurationError("recovery budgets must be positive")
+        if not self.reviewer_routes or any(route not in {"5.5", "terra", "sol"} for route in self.reviewer_routes):
+            raise ConfigurationError("recovery reviewer routes must use 5.5, terra, or sol")
         if self.thread_sandbox != "workspace-write" or self.approval_policy != "never":
             raise ConfigurationError("Windows runner requires approval_policy=never and workspace-write sandbox")
         if self.status_host != "127.0.0.1":

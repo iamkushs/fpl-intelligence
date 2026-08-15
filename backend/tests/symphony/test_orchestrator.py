@@ -7,6 +7,7 @@ import pytest
 from tools.symphony_runner.config import RunnerConfig
 from tools.symphony_runner.models import Issue, RunRecord, RunnerPaths
 from tools.symphony_runner.orchestrator import Orchestrator
+from tools.symphony_runner.logging import exception_location
 from tools.symphony_runner.state import RunnerLock, StateStore
 
 
@@ -17,7 +18,8 @@ class GitHub:
 
 
 class Logger:
-    def event(self,*_,**__): pass
+    def __init__(self): self.events=[]
+    def event(self,*args,**fields): self.events.append((args,fields))
 
 
 def cfg(tmp_path,concurrency=2):
@@ -75,3 +77,40 @@ def test_losing_label_cancels_active_worker(tmp_path):
         await runner.cycle(); await asyncio.sleep(0)
         assert runner.running[1].cancelled() or runner.running[1].cancelling()
     asyncio.run(scenario())
+
+
+def test_protocol_rotation_is_durable_and_preserves_workspace_route_and_workpad(tmp_path):
+    workspace = tmp_path / "spaces" / "GH-5"; workspace.mkdir(parents=True)
+    changed = workspace / "useful.py"; changed.write_text("preserve me", encoding="utf-8")
+    workpad = workspace / "workpad-sentinel"; workpad.write_text("existing Workpad", encoding="utf-8")
+    logger = Logger(); runner = Orchestrator(cfg(tmp_path), github=GitHub([]), logger=logger)
+    record = RunRecord(5, str(workspace), "symphony/gh-5", thread_id="damaged", turn_id="turn",
+        requested_model_route="5.5", resolved_model_id="gpt-5.5", reasoning_effort="medium",
+        productive_failure_count=0, escalation_level=0)
+    runner.store.records[5] = record
+
+    assert runner._rotate_unhealthy_thread(record, 5, "null terminal result")
+    loaded = StateStore(tmp_path / "state.json").load()[5]
+    assert loaded.thread_id is None and loaded.turn_id is None
+    assert loaded.unhealthy_thread_ids == ["damaged"]
+    assert loaded.requested_model_route == "5.5" and loaded.resolved_model_id == "gpt-5.5"
+    assert loaded.reasoning_effort == "medium" and loaded.productive_failure_count == 0
+    assert loaded.escalation_level == 0
+    assert changed.read_text(encoding="utf-8") == "preserve me"
+    assert workpad.read_text(encoding="utf-8") == "existing Workpad"
+
+
+def test_healthy_infrastructure_retry_does_not_rotate_thread(tmp_path):
+    runner = Orchestrator(cfg(tmp_path), github=GitHub([]), logger=Logger())
+    record = RunRecord(1, "workspace", "branch", thread_id="healthy", turn_id="turn")
+    # Rotation is an explicit protocol-anomaly operation, not part of ordinary retry handling.
+    assert record.thread_id == "healthy" and record.unhealthy_thread_ids == []
+
+
+def test_safe_exception_location_omits_exception_payload():
+    try:
+        raise TypeError("secret giant payload")
+    except TypeError as exc:
+        location = exception_location(exc)
+    assert location and "test_safe_exception_location" in location
+    assert "secret giant payload" not in location and "giant" not in location

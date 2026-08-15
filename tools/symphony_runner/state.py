@@ -22,7 +22,7 @@ class StateStore:
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.path.with_suffix(".tmp")
-        payload: dict[str, Any] = {"version": 1, "issues": {str(key): value.to_dict() for key, value in self.records.items()}}
+        payload: dict[str, Any] = {"version": 2, "issues": {str(key): value.to_dict() for key, value in self.records.items()}}
         temp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         os.replace(temp, self.path)
 

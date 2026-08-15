@@ -58,7 +58,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "status":
         from .config import default_data_root
         store = StateStore(default_data_root() / "state.json"); store.load()
-        print(json.dumps({str(k): v.to_dict() for k, v in store.records.items()}, indent=2)); return 0
+        compact = {}
+        for key, record in store.records.items():
+            incident = next((v for v in record.incidents if v.get("incident_id") == record.current_incident_id), {})
+            compact[str(key)] = {"phase": record.phase, "status": record.status,
+                "coder": {"route": record.requested_model_route, "model": record.resolved_model_id,
+                          "effort": record.reasoning_effort},
+                "reviewer": {"route": record.reviewer_route, "model": record.reviewer_model_id,
+                             "effort": record.reviewer_effort, "verdict": record.reviewer_verdict},
+                "incident": {"id": record.current_incident_id, "class": incident.get("failure_class"),
+                             "repair_attempt": incident.get("repair_attempts", 0)},
+                "productive_failure_count": record.productive_failure_count,
+                "escalation": record.escalation_level, "thread_rotations": record.thread_rotations,
+                "parked_for_infrastructure_repair": record.parked_for_maintenance}
+        print(json.dumps(compact, indent=2)); return 0
     config = load_workflow(Path(getattr(args, "workflow", "WORKFLOW.md")))
     assert config.paths
     if args.command == "models":

@@ -25,6 +25,14 @@ hooks:
 agent:
   max_concurrent_agents: 2
   max_turns: 20
+recovery:
+  max_incident_repairs: 3
+  max_issue_repairs: 9
+  reviewer_routes:
+    - "5.5"
+    - terra
+    - sol
+  rescue_timeout_ms: 900000
 codex:
   command: codex app-server
   approval_policy: never
