@@ -1,0 +1,26 @@
+# SUPERSEDED historical autonomous-build configuration.
+# Product AI uses Codex App Server; do not use these provider pools or routes.
+
+pools:
+  PLANNING:
+    models: ["auto/reasoning:pro", "nvidia/deepseek-ai/deepseek-v4-pro"]
+  IMPLEMENTATION:
+    models: ["auto/best-coding", "nvidia/qwen/qwen3-coder-480b-a35b-instruct"]
+  REVIEW:
+    models: ["auto/smart", "nvidia/mistralai/mistral-large-3-675b-instruct-2512"]
+  REFEREE:
+    models: ["auto/best-reasoning", "nvidia/google/gemma-3-12b-it"]
+  HELPER:
+    models: ["auto/fast", "nvidia/deepseek-ai/deepseek-v4-flash"]
+
+approved_providers:
+  - codestral
+  - mistral
+  - cloudflare-ai
+  - cerebras
+  - groq
+  - nvidia
+  - gemini
+  - siliconflow
+  - oc
+  - omniroute # auto/* routes are through omniroute

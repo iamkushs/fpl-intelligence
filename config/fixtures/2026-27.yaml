@@ -1,0 +1,33 @@
+# Add one fixture block for each Gameweek you want tracked.
+# Keep repeated manager names/entry IDs consistent with managers.yaml.
+# Replace null with integer FPL entry IDs.
+# Safe to commit. No secrets belong here.
+
+season: "2026-27"
+
+fixtures:
+  - gameweek: 1
+
+    our_team:
+      team_name: ""
+      manager_1:
+        manager_key: manager_a
+        name: ""
+        entry_id: null
+      manager_2:
+        manager_key: manager_b
+        name: ""
+        entry_id: null
+
+    opponent:
+      team_name: ""
+      manager_1:
+        manager_key: manager_c
+        name: ""
+        entry_id: null
+      manager_2:
+        manager_key: manager_d
+        name: ""
+        entry_id: null
+
+# Copy the block above for GW2, GW3, etc.

@@ -1,0 +1,26 @@
+# Fill names and official FPL entry IDs.
+# Safe to commit. No secrets belong here.
+# Replace null with an integer entry ID, e.g. entry_id: 123456
+
+season: "2026-27"
+
+managers:
+  manager_a:
+    name: ""
+    entry_id: null
+    role: primary
+
+  manager_b:
+    name: ""
+    entry_id: null
+    role: primary
+
+  manager_c:
+    name: ""
+    entry_id: null
+    role: opponent
+
+  manager_d:
+    name: ""
+    entry_id: null
+    role: opponent

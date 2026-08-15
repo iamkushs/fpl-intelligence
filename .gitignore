@@ -1,0 +1,35 @@
+.env
+.env.*
+!.env.example
+
+# Repository documentation policy: only the two root policy files are tracked.
+*.md
+!/AGENTS.md
+!/WORKFLOW.md
+
+.venv/
+__pycache__/
+.pytest_cache/
+.test-tmp-*/
+*.py[cod]
+
+node_modules/
+.next/
+*.tsbuildinfo
+
+state/storage/
+state/runtime/
+logs/runtime/
+
+# Local-only legacy agent experiments and generated reports.
+.opencode/
+logs/autonomous/
+eval/
+eval_2/
+state/PROJECT_STATE.json
+scripts/autonomous_build.py
+scripts/check_build_plan.py
+scripts/repair_state.py
+
+.DS_Store
+Thumbs.db

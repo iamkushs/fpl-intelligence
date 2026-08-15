@@ -1,0 +1,25 @@
+[project]
+name = "fpl-intelligence"
+version = "0.1.0"
+description = "FPL Intelligence System - Autonomous Fantasy Premier League decision support"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "sqlalchemy",
+    "psycopg",
+    "alembic",
+    "pydantic",
+    "pydantic-settings",
+    "httpx",
+    "pyyaml",
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+include = ["fpl_intelligence*"]
