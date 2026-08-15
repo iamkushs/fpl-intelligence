@@ -2,7 +2,10 @@ import subprocess
 from pathlib import Path
 
 from tools.symphony_runner.models import Issue
-from tools.symphony_runner.workspace import WorkspaceManager
+import pytest
+
+from tools.symphony_runner.models import ConfigurationError
+from tools.symphony_runner.workspace import HostGitLifecycle, WorkspaceManager
 
 
 def git(cwd,*args): subprocess.run(["git",*args],cwd=cwd,check=True,capture_output=True,text=True)
@@ -30,3 +33,29 @@ def test_cleanup_requires_eligibility_and_supports_dry_run(tmp_path):
     assert not manager.cleanup(issue,dry_run=True,allowed=False)
     assert manager.cleanup(issue,dry_run=True,allowed=True) and path.exists()
     assert manager.cleanup(issue,dry_run=False,allowed=True) and not path.exists()
+
+
+def test_host_git_sync_commit_push_preserves_retry_workspace_and_rerere(tmp_path):
+    bare=origin(tmp_path); manager=WorkspaceManager(tmp_path/"spaces","o/r"); manager.clone_url=str(bare)
+    item=Issue(4,"Repair","",("symphony",),"open","u"); workspace=manager.prepare(item)
+    (workspace.path/"task.txt").write_text("useful retry state")
+    upstream=tmp_path/"upstream"; git(tmp_path,"clone",str(bare),str(upstream)); git(upstream,"config","user.email","test@example.com"); git(upstream,"config","user.name","Test")
+    (upstream/"main.txt").write_text("new main"); git(upstream,"add","main.txt"); git(upstream,"commit","-m","main update"); git(upstream,"push","origin","main")
+    lifecycle=HostGitLifecycle(); assert lifecycle.synchronize(workspace)
+    assert (workspace.path/"task.txt").read_text() == "useful retry state"
+    lifecycle.verify=lambda _: None
+    lifecycle.verify(workspace); commit=lifecycle.commit_and_push(workspace,"task commit")
+    assert commit == subprocess.run(["git","rev-parse",f"refs/heads/{workspace.branch}"],cwd=bare,capture_output=True,text=True,check=True).stdout.strip()
+    assert subprocess.run(["git","config","--get","rerere.enabled"],cwd=workspace.path,capture_output=True,text=True).stdout.strip()=="true"
+
+
+def test_host_git_guardrails_reject_markdown_runtime_and_verification_failure(tmp_path):
+    manager=WorkspaceManager(tmp_path/"spaces","o/r"); manager.clone_url=str(origin(tmp_path)); workspace=manager.prepare(Issue(5,"","",("symphony",),"open","u"))
+    lifecycle=HostGitLifecycle()
+    with pytest.raises(ConfigurationError): lifecycle.validate_changes(workspace,["notes.md"])
+    with pytest.raises(ConfigurationError): lifecycle.validate_changes(workspace,[".env"])
+    calls=[]
+    def fail_verify(command,**kwargs):
+        calls.append(command); return subprocess.CompletedProcess(command,1,"","failed")
+    with pytest.raises(ConfigurationError): HostGitLifecycle(run=fail_verify).verify(workspace)
+    assert not any("push" in call or "commit" in call for call in calls)

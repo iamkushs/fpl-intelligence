@@ -14,6 +14,7 @@ from .config import RunnerConfig
 from .models import AppServerError, AppServerTimeout, TurnResult
 
 ToolHandler = Callable[[str, dict[str, Any]], Any]
+StateHandler = Callable[[str], None]
 
 
 def executable_command(command: tuple[str, ...] | list[str]) -> tuple[str, ...]:
@@ -99,7 +100,8 @@ class CodexAppServer:
         await self._send({"id": message["id"], "result": result})
         return True
 
-    async def run_turn(self, prompt: str, thread_id: str | None = None) -> TurnResult:
+    async def run_turn(self, prompt: str, thread_id: str | None = None, *,
+                       on_thread: StateHandler | None = None, on_turn: StateHandler | None = None) -> TurnResult:
         if not self.process: await self.start()
         if not self._initialized:
             await self._request("initialize", {"clientInfo": {"name": "fpl_symphony_windows", "title": "FPL Symphony Windows Runner", "version": "0.1.0"}, "capabilities": {"experimentalApi": True}})
@@ -118,10 +120,15 @@ class CodexAppServer:
         thread_id = str(thread.get("id") or thread.get("threadId") or "")
         if not thread_id: raise AppServerError("thread response did not contain an id")
         self._active_thread_id = thread_id
+        if on_thread:
+            on_thread(thread_id)
         turn = await self._request("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}],
             "cwd": str(self.cwd), "approvalPolicy": self.config.approval_policy, "sandboxPolicy": {**self.config.sandbox_policy, "writableRoots": [str(self.cwd)]},
             "runtimeWorkspaceRoots": [str(self.cwd)]})
         turn_value = turn.get("turn", turn); turn_id = str(turn_value.get("id") or turn_value.get("turnId") or "")
+        if not turn_id: raise AppServerError("turn response did not contain an id")
+        if on_turn:
+            on_turn(turn_id)
         deadline = time.monotonic() + self.config.turn_timeout_ms / 1000; events = 0
         while True:
             remaining = deadline - time.monotonic()

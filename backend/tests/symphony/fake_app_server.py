@@ -17,6 +17,7 @@ for line in sys.stdin:
         print(json.dumps({"id": message["id"], "result": {"thread": {"id": thread}}}), flush=True)
     elif method == "turn/start":
         print(json.dumps({"id": message["id"], "result": {"turn": {"id": "turn-fake"}}}), flush=True)
+        if mode == "crash_after_turn": sys.exit(4)
         if mode == "stall": time.sleep(10); continue
         print(json.dumps({"id": 900, "method": "item/tool/call", "params": {"tool": "read_issue", "arguments": {"issue_number": 1}, "callId": "c", "threadId": thread, "turnId": "turn-fake"}}), flush=True)
     elif message.get("id") == 900:

@@ -2,6 +2,7 @@ param([int]$TimeoutSeconds = 3600, [switch]$RecordRuntime)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
+. "$PSScriptRoot/symphony-runner-process.ps1"
 
 foreach ($commandName in @('gh','git','codex','uv')) {
     if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) { throw "Required command not found: $commandName" }
@@ -12,14 +13,22 @@ uv run python -m tools.symphony_runner validate WORKFLOW.md
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 $repo = (git remote get-url origin) -replace '^.*github\.com[:/]','' -replace '\.git$',''
-$body = 'Opt-in Windows Symphony smoke test. Do not modify product behavior. Use one ## Codex Workpad. Change only tooling/symphony-smoke.env so SMOKE_TEST_SEQUENCE equals this issue number; run .\scripts\verify-all.ps1; sync origin/main; push the issue branch; create a PR referencing this issue; update the Workpad; remove symphony; add symphony-review; keep the issue open; do not merge.'
+$dataRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'FPLSymphony' } else { Join-Path $HOME 'AppData/Local/FPLSymphony' }
+$lockPath = Join-Path $dataRoot 'runner.lock'
+$existingRunner = Test-SymphonyCompatibleRunner -Repository $repo -LockPath $lockPath
+$body = 'Opt-in Windows Symphony smoke test. Do not modify product behavior. Use one ## Codex Workpad. Change only tooling/symphony-smoke.env so SMOKE_TEST_SEQUENCE equals this issue number; run .\scripts\verify-all.ps1; review the diff; record successful verification and HOST HANDOFF READY in the Workpad; let the host runner sync, commit, push, create a PR, and transition labels; keep the issue open; do not merge.'
 $issueUrl = gh issue create --repo $repo --title 'Windows Symphony smoke test: harmless handoff' --label symphony --body $body
 $issueNumber = [int]($issueUrl -split '/')[-1]
 Write-Host "Created $issueUrl"
 
+$runner = $null
 $runnerOut = Join-Path $env:TEMP "fpl-symphony-smoke-$issueNumber.out"
 $runnerErr = Join-Path $env:TEMP "fpl-symphony-smoke-$issueNumber.err"
-$runner = Start-Process -FilePath 'uv' -ArgumentList @('run','python','-m','tools.symphony_runner','run','WORKFLOW.md') -WorkingDirectory $repoRoot -WindowStyle Hidden -RedirectStandardOutput $runnerOut -RedirectStandardError $runnerErr -PassThru
+if ($existingRunner) {
+    Write-Host 'Using the healthy runner that already owns this state root.'
+} else {
+    $runner = Start-Process -FilePath 'uv' -ArgumentList @('run','python','-m','tools.symphony_runner','run','WORKFLOW.md') -WorkingDirectory $repoRoot -WindowStyle Hidden -RedirectStandardOutput $runnerOut -RedirectStandardError $runnerErr -PassThru
+}
 try {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
@@ -47,8 +56,8 @@ try {
             }
             exit 0
         }
-    } while ((Get-Date) -lt $deadline -and -not $runner.HasExited)
+    } while ((Get-Date) -lt $deadline -and ($null -eq $runner -or -not $runner.HasExited))
     throw "Smoke test did not complete. Inspect $issueUrl, $runnerOut and $runnerErr."
 } finally {
-    if (-not $runner.HasExited) { Stop-Process -Id $runner.Id -ErrorAction SilentlyContinue; $runner.WaitForExit(5000) | Out-Null }
+    Stop-SymphonyOwnedProcess -Process $runner -Owned ($null -ne $runner)
 }

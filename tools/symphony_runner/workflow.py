@@ -45,4 +45,4 @@ def render_prompt(config: RunnerConfig, issue: Issue, branch: str, workspace: Pa
             raise ConfigurationError(f"unknown workflow template variable: {key}")
         return values[key]
     rendered = VARIABLE.sub(replace, config.prompt)
-    return rendered + f"\n\nIssue body (acceptance criteria):\n{issue.body}\n\nWorkspace: {workspace}\nBranch: {branch}\nAttempt: {attempt}. Resume existing Git and Workpad progress; do not auto-merge."
+    return rendered + f"\n\nIssue body (acceptance criteria):\n{issue.body}\n\nWorkspace: {workspace}\nBranch: {branch}\nAttempt: {attempt}. Resume the existing workspace and Workpad progress. Do not mutate .git. When implementation, diff review, and verification are complete, record HOST HANDOFF READY in Validation for the runner."

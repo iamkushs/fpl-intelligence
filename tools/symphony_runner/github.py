@@ -106,8 +106,7 @@ class GitHubClient:
             spec("update_workpad", "Update the existing Codex Workpad", {**number, "body": {"type": "string"}}, ["issue_number", "body"]),
             spec("add_label", "Add an allowed Symphony label", {**number, "label": {"type": "string"}}, ["issue_number", "label"]),
             spec("remove_label", "Remove an allowed Symphony label", {**number, "label": {"type": "string"}}, ["issue_number", "label"]),
-            spec("inspect_pr", "Inspect the PR for a branch", {"branch": {"type": "string"}}, ["branch"]),
-            spec("create_pr", "Create a PR for the current branch", {"branch": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}, ["branch", "title", "body"]),
+            spec("inspect_pr", "Inspect the PR for the current branch; final PR mutation is owned by the host runner", {"branch": {"type": "string"}}, ["branch"]),
         ]}]
 
     def invoke_tool(self, name: str, arguments: dict[str, Any]) -> Any:
@@ -124,5 +123,4 @@ class GitHubClient:
             if label not in allowed_labels: raise ValueError("Only Symphony workflow labels are allowed")
             getattr(self, name)(int(arguments["issue_number"]), label); return {"ok": True}
         if name == "inspect_pr": return self.pr_for_branch(str(arguments["branch"]))
-        if name == "create_pr": return self.create_pr(str(arguments["branch"]), str(arguments["title"]), str(arguments["body"]))
         raise ValueError(f"Unsupported GitHub tool: {name}")

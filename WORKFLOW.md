@@ -63,8 +63,8 @@ Do not close an implementation issue merely to stop polling. Do not rely on Symp
 
 ## Start or resume
 
-1. Inspect the current branch, `HEAD`, `git status`, existing changes and commits, and any existing PR.
-2. Fetch `origin`. Understand whether the issue branch contains current `origin/main`; merge `origin/main` before implementation when synchronization is needed. Do not discard existing work.
+1. Inspect the current branch, `HEAD`, `git status`, existing changes and commits, and any existing PR using read-only Git commands. The host runner owns operations that write `.git`.
+2. Reconcile the visible branch and workspace state. Do not fetch, switch, merge, stage, commit, or push: request host handoff after the implementation is verified, and the runner will synchronize with `origin/main` without discarding existing work.
 3. Read the issue body and find the single active issue comment beginning `## Codex Workpad`. Create it only when none exists; thereafter edit that same comment instead of posting progress comments or changing the issue body.
 4. Reconcile completed acceptance criteria and validation from Git state and the workpad. Resume from current state without repeating completed investigation or implementation unnecessarily.
 5. Keep the workpad current using exactly this structure:
@@ -85,16 +85,16 @@ Do not close an implementation issue merely to stop polling. Do not rely on Symp
 ### Blockers
 ```
 
-Record the branch and short `HEAD`, synchronization results, meaningful milestones, validation commands/results, commit, and PR handoff in the workpad. Retries after an App Server timeout or stall follow this same reconciliation flow and must not destructively restart.
+Record the branch and short `HEAD`, meaningful milestones, validation commands/results, and handoff readiness in the workpad. The host runner records final synchronization, commit, push, and PR evidence. Retries after an App Server timeout or stall follow this same reconciliation flow and must not destructively restart.
 
 ## Implementation and handoff
 
 1. Implement only the current issue, keep the workpad checklist accurate, and fix code bugs, test failures, and merge conflicts rather than calling them external blockers.
 2. Run targeted verification, then `./scripts/verify-all.sh` on Linux/CI or `.\scripts\verify-all.ps1` on Windows. Review the diff and fix task-caused failures without weakening checks.
-3. Fetch `origin` and merge the latest `origin/main` into the issue branch. Resolve conflicts, rerun targeted checks and the platform verification gate, and record evidence in the workpad.
-4. Prefer merge-based synchronization. Never use plain `--force`; use `--force-with-lease` only after an intentional, documented history rewrite. Do not use destructive Git recovery to mask authentication or permission errors.
-5. Create or update a focused commit, push the issue branch, and create or update its GitHub PR. Do not auto-merge.
-6. Confirm the final diff, PR, and validation evidence in the workpad. Remove `symphony` from the issue and add `symphony-review`, leaving the issue open for human review.
+3. After verification passes, record the exact commands and successful results under `### Validation`, review the logical workspace diff, and add the literal marker `HOST HANDOFF READY`. Do not add it when verification is incomplete or failing.
+4. The host runner inspects every changed/untracked path, enforces repository hygiene and Markdown policy, fetches and merge-synchronizes latest `origin/main`, and verifies the resulting effective tree. If synchronization changes the tree, that merged result must pass verification before it can be pushed.
+5. The host runner stages only the inspected task changes, creates a focused commit, pushes the issue branch, and creates or updates the GitHub PR. Repository-local rerere remains enabled. Neither Codex nor the runner auto-merges.
+6. The host runner records final synchronization, commit, push, PR, and validation evidence in the workpad, then removes `symphony` and adds `symphony-review`, leaving the issue open for human review.
 
 ## True external blockers
 

@@ -16,18 +16,20 @@ from .models import ConfigurationError, Issue, RunRecord, RetryableError, Runner
 from .state import StateStore
 from .status_server import StatusServer
 from .workflow import render_prompt
-from .workspace import Workspace, WorkspaceManager
+from .workspace import HostGitLifecycle, Workspace, WorkspaceManager
 
 
 class Orchestrator:
     def __init__(self, config: RunnerConfig, github: GitHubClient | None = None, workspace: WorkspaceManager | None = None,
-                 store: StateStore | None = None, logger: StructuredLogger | None = None):
+                 store: StateStore | None = None, logger: StructuredLogger | None = None,
+                 git_lifecycle: HostGitLifecycle | None = None):
         assert config.paths
         self.config = config
         self.github = github or GitHubClient(config.repository, config.tracker_token)
         self.workspace = workspace or WorkspaceManager(config.paths.workspaces, config.repository)
         self.store = store or StateStore(config.paths.state_file); self.store.load()
         self.logger = logger or StructuredLogger(config.paths.logs)
+        self.git_lifecycle = git_lifecycle or HostGitLifecycle()
         self.running: dict[int, asyncio.Task[None]] = {}
         self.stop_event = asyncio.Event(); self.started = time.monotonic()
 
@@ -78,13 +80,23 @@ class Orchestrator:
                     raise ValueError("PR body must reference the current issue")
             return self.github.invoke_tool(name, arguments)
         client = CodexAppServer(self.config, workspace.path, self.github.tool_specs(), scoped_tool)
+        def persist_thread(value: str) -> None:
+            record.thread_id = value; record.last_activity = utc_now(); self.store.save()
+        def persist_turn(value: str) -> None:
+            record.turn_id = value; record.last_activity = utc_now(); self.store.save()
         try:
             for turn_number in range(self.config.max_turns):
-                result = await client.run_turn(prompt if turn_number == 0 else "Resume from Git and the existing Codex Workpad. Complete only remaining acceptance criteria and handoff requirements.", record.thread_id)
-                record.thread_id, record.turn_id = result.thread_id, result.turn_id
+                result = await client.run_turn(prompt if turn_number == 0 else "Resume from the existing workspace and Codex Workpad. Complete only remaining acceptance criteria and request host handoff.",
+                                               record.thread_id, on_thread=persist_thread, on_turn=persist_turn)
+                record.thread_id, record.turn_id = result.thread_id, None
                 record.last_activity = utc_now(); self.store.save()
                 current = self.github.get_issue(issue.number); labels = set(current.labels)
                 pr = self.github.pr_for_branch(workspace.branch); pad = self.github.find_workpad(issue.number)
+                if pad and self._handoff_ready(pad.body):
+                    commit = self._host_handoff(issue, workspace, pad)
+                    record.turn_id = None; record.status = "review"; record.last_error = None
+                    self.logger.event("host_handoff", issue=issue.number, commit=commit)
+                    break
                 if "symphony-review" in labels and "symphony" not in labels and pr and pad and "### Validation" in pad.body:
                     record.status = "review"; record.last_error = None; break
                 if "symphony-blocked" in labels and "symphony" not in labels and pad and "### Blockers" in pad.body:
@@ -108,6 +120,28 @@ class Orchestrator:
                 self.logger.event("issue_retry", issue=issue.number, attempt=record.attempt, retry_at=record.retry_at, error=record.last_error)
         finally:
             await client.close(); record.last_activity = utc_now(); self.store.save()
+
+    @staticmethod
+    def _handoff_ready(body: str) -> bool:
+        lower = body.lower()
+        return "host handoff ready" in lower and "verify-all" in lower and any(word in lower for word in ("passed", "success"))
+
+    def _host_handoff(self, issue: Issue, workspace: Workspace, workpad: Any) -> str:
+        files = self.git_lifecycle.changed_files(workspace)
+        self.git_lifecycle.validate_changes(workspace, files)
+        merged = self.git_lifecycle.synchronize(workspace)
+        # The host always verifies the effective final tree, including any merge result.
+        self.git_lifecycle.verify(workspace)
+        commit = self.git_lifecycle.commit_and_push(workspace, f"fix: {issue.title} (#{issue.number})")
+        pr = self.github.pr_for_branch(workspace.branch)
+        if not pr:
+            pr = self.github.create_pr(workspace.branch, issue.title, f"Closes #{issue.number}\n\nHost-verified Symphony handoff.")
+        suffix = (f"\n\nHost handoff: commit `{commit[:12]}` pushed; final verification passed; "
+                  f"origin/main synchronization {'changed the tree and was reverified' if merged else 'was current'}. PR: {pr.get('url', '')}\n")
+        self.github.update_workpad(workpad.comment_id, workpad.body.rstrip() + suffix)
+        self.github.remove_label(issue.number, "symphony")
+        self.github.add_label(issue.number, "symphony-review")
+        return commit
 
     async def cycle(self) -> None:
         self.logger.event("poll_cycle", active=len(self.running))
