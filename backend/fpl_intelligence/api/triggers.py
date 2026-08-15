@@ -24,6 +24,7 @@ class TriggerResponse(BaseModel):
     gameweek: int | None
     evidence: dict | None
     monitoring_trigger_id: str | None
+    situation_id: str | None
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None
@@ -75,6 +76,13 @@ class EvaluationResponse(BaseModel):
     failures: list[dict[str, object]]
 
 
+class QueueSituationPlayerResponse(BaseModel):
+    player_id: int
+    player_name: str
+    club: str
+    position: str
+
+
 class QueuePlayerResponse(BaseModel):
     player_id: int
     player_name: str
@@ -84,6 +92,9 @@ class QueuePlayerResponse(BaseModel):
     primary_trigger: TriggerResponse
     from_previous_monitoring: bool
     most_recent_research_at: datetime | None
+    situation_id: str | None = None
+    situation_title: str | None = None
+    other_involved_players: list[QueueSituationPlayerResponse] = Field(default_factory=list)
 
 
 def trigger_response(item) -> TriggerResponse:
@@ -110,12 +121,29 @@ def research_queue(request: Request, session: Session = Depends(get_session)):
         player = official.get(item.player_id)
         if player is None:
             continue
+        other_players = []
+        if item.situation is not None:
+            for involved in item.situation.players:
+                if involved.id == item.player_id:
+                    continue
+                official_involved = official.get(involved.id)
+                if official_involved is None:
+                    continue
+                other_players.append(QueueSituationPlayerResponse(
+                    player_id=official_involved.id,
+                    player_name=official_involved.display_name,
+                    club=official_involved.club_name,
+                    position=official_involved.position,
+                ))
         response.append(QueuePlayerResponse(
             player_id=item.player_id, player_name=player.display_name, club=player.club_name,
             position=player.position, triggers=[trigger_response(t) for t in item.triggers],
             primary_trigger=trigger_response(item.primary_trigger),
             from_previous_monitoring=item.from_previous_monitoring,
             most_recent_research_at=item.most_recent_research_at,
+            situation_id=item.situation.id if item.situation is not None else None,
+            situation_title=item.situation.title if item.situation is not None else None,
+            other_involved_players=other_players,
         ))
     return response
 

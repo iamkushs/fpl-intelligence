@@ -86,6 +86,14 @@ research_result_players = Table(
     Column("player_id", Integer, ForeignKey("players.id", ondelete="CASCADE"), primary_key=True),
 )
 
+situation_players = Table(
+    "situation_players",
+    Base.metadata,
+    Column("situation_id", String(36), ForeignKey("research_situations.id", ondelete="CASCADE"), primary_key=True),
+    Column("player_id", Integer, ForeignKey("players.id", ondelete="CASCADE"), primary_key=True),
+    Index("ix_situation_players_player_id", "player_id"),
+)
+
 watchlist_suggestion_results = Table(
     "watchlist_suggestion_results",
     Base.metadata,
@@ -105,6 +113,13 @@ class ResearchThreadStatus:
     ACTIVE = "active"
     COMPLETE = "complete"
     FAILED = "failed"
+
+
+class ResearchSituationStatus:
+    OPEN = "open"
+    LEANING = "leaning"
+    RESOLVED = "resolved"
+    ACTIVE = frozenset({OPEN, LEANING})
 
 
 class ResearchLinkStatus:
@@ -131,6 +146,54 @@ class Player(Base):
     gameweek_pulses: Mapped[list["PlayerGameweekPulse"]] = relationship(back_populates="player")
     research_triggers: Mapped[list["PlayerResearchTrigger"]] = relationship(back_populates="player")
     monitoring_triggers: Mapped[list["MonitoringTrigger"]] = relationship(back_populates="player")
+    research_situations: Mapped[list["ResearchSituation"]] = relationship(
+        secondary=situation_players, back_populates="players"
+    )
+
+
+class ResearchSituation(Base):
+    """Shared football/FPL context that can involve one or more canonical players."""
+
+    __tablename__ = "research_situations"
+    __table_args__ = (
+        CheckConstraint("status IN ('open', 'leaning', 'resolved')", name="ck_research_situations_status"),
+        Index("ix_research_situations_club_status", "club_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    club_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    context: Mapped[str] = mapped_column(Text, nullable=False)
+    fpl_relevance: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=ResearchSituationStatus.OPEN, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    players: Mapped[list[Player]] = relationship(
+        secondary=situation_players, back_populates="research_situations"
+    )
+    hypotheses: Mapped[list["SituationHypothesis"]] = relationship(
+        back_populates="situation", cascade="all, delete-orphan", order_by="SituationHypothesis.created_at"
+    )
+    research_triggers: Mapped[list["PlayerResearchTrigger"]] = relationship(back_populates="situation")
+    research_threads: Mapped[list["ResearchThread"]] = relationship(back_populates="situation")
+
+
+class SituationHypothesis(Base):
+    """Lightweight candidate interpretation for a research situation."""
+
+    __tablename__ = "situation_hypotheses"
+    __table_args__ = (
+        Index("ix_situation_hypotheses_situation_active", "situation_id", "active"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    situation_id: Mapped[str] = mapped_column(ForeignKey("research_situations.id", ondelete="CASCADE"), nullable=False, index=True)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    situation: Mapped[ResearchSituation] = relationship(back_populates="hypotheses")
 
 
 class PlayerGameweekPulse(Base):
@@ -210,12 +273,14 @@ class PlayerResearchTrigger(Base):
     gameweek: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     monitoring_trigger_id: Mapped[str | None] = mapped_column(ForeignKey("monitoring_triggers.id", ondelete="SET NULL"), nullable=True, index=True)
+    situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     player: Mapped[Player] = relationship(back_populates="research_triggers")
     monitoring_trigger: Mapped["MonitoringTrigger | None"] = relationship(back_populates="research_triggers")
+    situation: Mapped["ResearchSituation | None"] = relationship(back_populates="research_triggers")
 
 
 class MonitoringTrigger(Base):
@@ -324,11 +389,13 @@ class ResearchThread(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=ResearchThreadStatus.ACTIVE, index=True)
     gameweek_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     links: Mapped[list["ResearchLink"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
     results: Mapped[list["ResearchResult"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
     watchlist_suggestions: Mapped[list[WatchlistSuggestion]] = relationship(back_populates="thread", cascade="all, delete-orphan")
+    situation: Mapped["ResearchSituation | None"] = relationship(back_populates="research_threads")
 
 
 class ResearchLink(Base):
