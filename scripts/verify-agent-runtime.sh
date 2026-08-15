@@ -70,8 +70,9 @@ else
   echo "codex-tested-version: $CODEX_VERSION (matches)"
 fi
 
-if [[ "${SYMPHONY_REF:-UNPINNED}" == "UNPINNED" || -z "${SYMPHONY_REF:-}" ]]; then
-  echo "symphony-ref: UNPINNED (record after a successful end-to-end smoke test)"
+echo "symphony-implementation: ${SYMPHONY_IMPLEMENTATION:-unknown}"
+if [[ "${SYMPHONY_REF:-UNTESTED}" == "UNTESTED" || "${SYMPHONY_REF:-}" == "UNPINNED" || -z "${SYMPHONY_REF:-}" ]]; then
+  echo "symphony-ref: UNTESTED (record after a successful end-to-end smoke test)"
 else
   echo "symphony-ref: $SYMPHONY_REF"
 fi

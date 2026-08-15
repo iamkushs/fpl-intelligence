@@ -8,6 +8,7 @@
 - Research and application state belong in PostgreSQL/database persistence, not generated Markdown files. Temporary research output is allowed only when ignored and uncommitted.
 - Inspect existing code before adding abstractions. Reuse the current architecture and do not create duplicate or competing subsystems.
 - Add or update tests for changed behavior. Run `./scripts/verify-all.sh` before completion and inspect the resulting diff.
+- On Windows, use `.\scripts\verify-all.ps1`; the shell scripts remain the Linux/CI equivalent.
 - The GitHub issue title and body define the current task; the issue body is its acceptance criteria. The single GitHub `## Codex Workpad` comment records execution and resume state. Implement only that issue, not requirements from future issues.
 - Never expose or use production credentials in agent verification. Do not auto-merge during the current autonomy phase; run deterministic verification before human handoff.
 - Existing local Markdown files other than root WORKFLOW.md and root AGENTS.md are legacy/local-only material and must not be used as implementation requirements or committed.

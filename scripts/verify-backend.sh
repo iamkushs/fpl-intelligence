@@ -11,12 +11,12 @@ for command_name in uv python; do
   fi
 done
 
-uv run python -m compileall -q backend
-uv run python -m pytest
-
+uv run python -m compileall -q backend tools
 mkdir -p state/runtime
+pytest_dir="state/runtime/pytest-$$"
 migration_db="state/runtime/migrations-$$.db"
-trap 'rm -f -- "$migration_db"' EXIT
+trap 'rm -rf -- "$pytest_dir"; rm -f -- "$migration_db"' EXIT
+uv run python -m pytest --basetemp "$pytest_dir"
 export DATABASE_URL="sqlite:///$migration_db"
 uv run alembic upgrade head
 uv run alembic check

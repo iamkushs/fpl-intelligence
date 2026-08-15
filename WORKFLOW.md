@@ -18,6 +18,9 @@ hooks:
   after_create: |
     ./scripts/agent-bootstrap.sh
     ./scripts/verify-agent-runtime.sh --allow-missing-github-auth
+  after_create_windows:
+    - .\scripts\agent-bootstrap.ps1
+    - .\scripts\verify-agent-runtime.ps1 -AllowMissingGitHubAuth
   timeout_ms: 600000
 agent:
   max_concurrent_agents: 2
@@ -35,6 +38,9 @@ codex:
 observability:
   dashboard_enabled: true
   refresh_ms: 1000
+server:
+  host: 127.0.0.1
+  port: 4000
 ---
 
 You are implementing GitHub issue `{{ issue.identifier }}` in an isolated workspace for `iamkushs/fpl-intelligence`.
@@ -84,8 +90,8 @@ Record the branch and short `HEAD`, synchronization results, meaningful mileston
 ## Implementation and handoff
 
 1. Implement only the current issue, keep the workpad checklist accurate, and fix code bugs, test failures, and merge conflicts rather than calling them external blockers.
-2. Run targeted verification, then `./scripts/verify-all.sh`. Review the diff and fix task-caused failures without weakening checks.
-3. Fetch `origin` and merge the latest `origin/main` into the issue branch. Resolve conflicts, rerun targeted checks and `./scripts/verify-all.sh`, and record evidence in the workpad.
+2. Run targeted verification, then `./scripts/verify-all.sh` on Linux/CI or `.\scripts\verify-all.ps1` on Windows. Review the diff and fix task-caused failures without weakening checks.
+3. Fetch `origin` and merge the latest `origin/main` into the issue branch. Resolve conflicts, rerun targeted checks and the platform verification gate, and record evidence in the workpad.
 4. Prefer merge-based synchronization. Never use plain `--force`; use `--force-with-lease` only after an intentional, documented history rewrite. Do not use destructive Git recovery to mask authentication or permission errors.
 5. Create or update a focused commit, push the issue branch, and create or update its GitHub PR. Do not auto-merge.
 6. Confirm the final diff, PR, and validation evidence in the workpad. Remove `symphony` from the issue and add `symphony-review`, leaving the issue open for human review.
