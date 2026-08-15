@@ -5,7 +5,7 @@ from tools.symphony_runner.models import Issue
 import pytest
 
 from tools.symphony_runner.models import ConfigurationError
-from tools.symphony_runner.workspace import HostGitLifecycle, WorkspaceManager
+from tools.symphony_runner.workspace import HostGitLifecycle, Workspace, WorkspaceManager
 
 
 def git(cwd,*args): subprocess.run(["git",*args],cwd=cwd,check=True,capture_output=True,text=True)
@@ -59,3 +59,43 @@ def test_host_git_guardrails_reject_markdown_runtime_and_verification_failure(tm
         calls.append(command); return subprocess.CompletedProcess(command,1,"","failed")
     with pytest.raises(ConfigurationError): HostGitLifecycle(run=fail_verify).verify(workspace)
     assert not any("push" in call or "commit" in call for call in calls)
+
+
+def local_workspace(tmp_path: Path) -> Workspace:
+    repo=tmp_path/"repo"; repo.mkdir(); git(repo,"init","-b","main"); git(repo,"config","user.email","test@example.com"); git(repo,"config","user.name","Test")
+    return Workspace(repo,"main",True)
+
+
+def test_status_z_regression_preserves_smoke_path_first_character():
+    files=HostGitLifecycle._parse_status_z(" M tooling/symphony-smoke.env\0")
+    assert files == ["tooling/symphony-smoke.env"]
+    assert "ooling/symphony-smoke.env" not in files
+
+
+def test_actual_discovery_and_staging_preserve_exact_smoke_path(tmp_path):
+    workspace=local_workspace(tmp_path); path=workspace.path/"tooling"/"symphony-smoke.env"; path.parent.mkdir(); path.write_text("SMOKE=1")
+    git(workspace.path,"add","tooling/symphony-smoke.env"); git(workspace.path,"commit","-m","base")
+    path.write_text("SMOKE=2")
+    lifecycle=HostGitLifecycle()
+    assert lifecycle.changed_files(workspace) == ["tooling/symphony-smoke.env"]
+    assert lifecycle.stage_changes(workspace) == ["tooling/symphony-smoke.env"]
+    staged=subprocess.run(["git","diff","--cached","--name-only","-z"],cwd=workspace.path,capture_output=True,text=True,check=True).stdout.split("\0")
+    assert [value for value in staged if value] == ["tooling/symphony-smoke.env"]
+
+
+def test_status_z_paths_modified_untracked_deleted_renamed_spaces_and_unicode(tmp_path):
+    workspace=local_workspace(tmp_path)
+    tracked = ["tooling/symphony-smoke.env", "backend/fpl_intelligence/models.py", "frontend/app/watchlist/page.tsx", "deleted.txt", "rename-old.txt"]
+    for name in tracked:
+        path=workspace.path/name; path.parent.mkdir(parents=True,exist_ok=True); path.write_text(name,encoding="utf-8")
+    git(workspace.path,"add","--",*tracked); git(workspace.path,"commit","-m","base")
+    for name in tracked[:3]: (workspace.path/name).write_text("modified",encoding="utf-8")
+    (workspace.path/"deleted.txt").unlink(); (workspace.path/"nested").mkdir(); git(workspace.path,"mv","rename-old.txt","nested/rename-new.txt")
+    additions=["nested/path with spaces/file.txt","nested/unicode-Δοκιμή.txt"]
+    for name in additions:
+        path=workspace.path/name; path.parent.mkdir(parents=True,exist_ok=True); path.write_text("new",encoding="utf-8")
+    expected=sorted(set(tracked[:3] + ["deleted.txt","nested/rename-new.txt",*additions]))
+    lifecycle=HostGitLifecycle(); assert lifecycle.changed_files(workspace) == expected
+    assert lifecycle.stage_changes(workspace) == expected
+    staged=lifecycle._git_output(workspace.path,"diff","--cached","--name-only","-z")
+    assert sorted(value for value in staged.split("\0") if value) == expected

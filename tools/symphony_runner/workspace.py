@@ -87,25 +87,39 @@ class HostGitLifecycle:
         self._run = run
 
     def _git(self, path: Path, *args: str) -> str:
-        result = self._run(["git", *args], cwd=path, capture_output=True, text=True, check=False)
+        return self._git_output(path, *args).strip()
+
+    def _git_output(self, path: Path, *args: str) -> str:
+        result = self._run(["git", *args], cwd=path, capture_output=True, text=True, encoding="utf-8", check=False)
         if result.returncode:
             raise RetryableError(f"host git {' '.join(args)} failed: {(result.stderr or result.stdout).strip()[:500]}")
-        return result.stdout.strip()
+        return result.stdout
+
+    @staticmethod
+    def _parse_status_z(output: str) -> list[str]:
+        """Parse `git status --porcelain=v1 -z` without normalizing path bytes."""
+        fields = output.split("\0")
+        paths: list[str] = []
+        index = 0
+        while index < len(fields):
+            record = fields[index]
+            if not record:
+                index += 1
+                continue
+            if len(record) < 4 or record[2] != " ":
+                raise ConfigurationError("Malformed NUL-delimited Git status record")
+            status = record[:2]
+            paths.append(record[3:])
+            if status[0] in {"R", "C"} or status[1] in {"R", "C"}:
+                index += 1
+                if index >= len(fields) or not fields[index]:
+                    raise ConfigurationError("Git rename/copy status omitted its source path")
+            index += 1
+        return sorted(set(paths))
 
     def changed_files(self, workspace: Workspace) -> list[str]:
-        output = self._git(workspace.path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
-        entries = output.split("\0") if output else []
-        files: list[str] = []
-        index = 0
-        while index < len(entries):
-            entry = entries[index]
-            if not entry:
-                index += 1; continue
-            status, name = entry[:2], entry[3:]
-            if status[0] in {"R", "C"}:
-                index += 1
-            files.append(name.replace("\\", "/")); index += 1
-        return sorted(set(files))
+        output = self._git_output(workspace.path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+        return self._parse_status_z(output)
 
     def validate_changes(self, workspace: Workspace, files: list[str]) -> None:
         root = workspace.path.resolve()
@@ -120,7 +134,7 @@ class HostGitLifecycle:
                 raise ConfigurationError(f"Refusing runtime/artifact path: {name}")
             if name.lower().endswith(".md") and name not in self.ALLOWED_MARKDOWN:
                 raise ConfigurationError(f"Markdown policy rejects: {name}")
-            ignored = self._run(["git", "check-ignore", "--quiet", "--", name], cwd=root, capture_output=True, text=True, check=False)
+            ignored = self._run(["git", "check-ignore", "--quiet", "--", name], cwd=root, capture_output=True, text=True, encoding="utf-8", check=False)
             if ignored.returncode == 0:
                 raise ConfigurationError(f"Refusing ignored path: {name}")
 
@@ -142,14 +156,20 @@ class HostGitLifecycle:
         if result.returncode:
             raise ConfigurationError(f"host verification failed: {(result.stderr or result.stdout).strip()[-1000:]}")
 
-    def commit_and_push(self, workspace: Workspace, message: str) -> str:
+    def stage_changes(self, workspace: Workspace) -> list[str]:
         files = self.changed_files(workspace)
         if files:
             self.validate_changes(workspace, files)
             self._git(workspace.path, "add", "--", *files)
-            staged = [line for line in self._git(workspace.path, "diff", "--cached", "--name-only", "-z").split("\0") if line]
+            output = self._git_output(workspace.path, "diff", "--cached", "--name-only", "-z")
+            staged = sorted(line for line in output.split("\0") if line)
             if sorted(staged) != files:
-                raise ConfigurationError("Staged files differ from inspected task changes")
+                raise ConfigurationError(f"Staged files differ from inspected task changes: inspected={files!r}, staged={staged!r}")
+        return files
+
+    def commit_and_push(self, workspace: Workspace, message: str) -> str:
+        files = self.stage_changes(workspace)
+        if files:
             self._git(workspace.path, "commit", "-m", message)
         commit = self._git(workspace.path, "rev-parse", "HEAD")
         self._git(workspace.path, "push", "-u", "origin", workspace.branch)
