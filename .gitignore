@@ -11,6 +11,8 @@
 __pycache__/
 .pytest_cache/
 .test-tmp-*/
+.tmp/
+.uv-cache/
 *.py[cod]
 
 node_modules/

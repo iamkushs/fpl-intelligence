@@ -6,7 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from fpl_intelligence.models import ResearchDocument, ResearchJob, ResearchRun, ResearchSection
+from fpl_intelligence.models import (
+    PlayerResearchTrigger,
+    ResearchDocument,
+    ResearchJob,
+    ResearchRun,
+    ResearchSection,
+    ResearchSituation,
+    ResearchThread,
+    SituationHypothesis,
+)
 from fpl_intelligence.repositories.research_documents import ResearchDocumentRepository
 from fpl_intelligence.repositories.research_jobs import ResearchJobRepository
 from fpl_intelligence.research.execution import (
@@ -16,6 +25,7 @@ from fpl_intelligence.research.execution import (
     ResearchJobNotReadyError,
 )
 from fpl_intelligence.research.service import ResearchRunService
+from fpl_intelligence.research.situations import ResearchSituationService
 from fpl_intelligence.research.two_stage import PlayerResolver
 from fpl_intelligence.repositories.research_persistence import ResearchPersistenceRepository
 
@@ -38,6 +48,72 @@ class LinkCollectionRequest(BaseModel):
 class LinkResearchRequest(BaseModel):
     link_ids: list[str] | None = None
     all_collected: bool = False
+
+
+class SituationCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    club_id: int | None = None
+    context: str = Field(min_length=1)
+    fpl_relevance: str = Field(min_length=1)
+    status: str = "open"
+    player_ids: list[int] = Field(default_factory=list)
+    last_checked_at: datetime | None = None
+
+
+class SituationUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    club_id: int | None = None
+    context: str | None = Field(default=None, min_length=1)
+    fpl_relevance: str | None = Field(default=None, min_length=1)
+    status: str | None = None
+    last_checked_at: datetime | None = None
+    touch_last_checked: bool = False
+
+
+class SituationPlayersRequest(BaseModel):
+    player_ids: list[int] = Field(min_length=1)
+
+
+class SituationHypothesisRequest(BaseModel):
+    statement: str = Field(min_length=1)
+    active: bool = True
+
+
+class SituationAttachTriggerRequest(BaseModel):
+    trigger_id: str = Field(min_length=1)
+
+
+class SituationAttachThreadRequest(BaseModel):
+    thread_id: str = Field(min_length=1)
+
+
+class SituationPlayerResponse(BaseModel):
+    id: int
+
+
+class SituationHypothesisResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    situation_id: str
+    statement: str
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ResearchSituationResponse(BaseModel):
+    id: str
+    title: str
+    club_id: int | None
+    context: str
+    fpl_relevance: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    last_checked_at: datetime | None
+    players: list[SituationPlayerResponse]
+    hypotheses: list[SituationHypothesisResponse]
 
 
 class ResearchLinkResponse(BaseModel):
@@ -233,6 +309,22 @@ def _run_response(run: ResearchRun) -> ResearchRunResponse:
     )
 
 
+def _situation_response(situation: ResearchSituation) -> ResearchSituationResponse:
+    return ResearchSituationResponse(
+        id=situation.id,
+        title=situation.title,
+        club_id=situation.club_id,
+        context=situation.context,
+        fpl_relevance=situation.fpl_relevance,
+        status=situation.status,
+        created_at=situation.created_at,
+        updated_at=situation.updated_at,
+        last_checked_at=situation.last_checked_at,
+        players=[SituationPlayerResponse(id=player.id) for player in sorted(situation.players, key=lambda item: item.id)],
+        hypotheses=[SituationHypothesisResponse.model_validate(item) for item in situation.hypotheses],
+    )
+
+
 def get_session(request: Request):
     database = getattr(request.app.state, "database", None)
     if database is None:
@@ -250,6 +342,117 @@ def get_session(request: Request):
 def _player_resolver(request: Request) -> PlayerResolver:
     snapshot = request.app.state.fpl_snapshot_service.get_snapshot()
     return PlayerResolver(snapshot.players)
+
+
+@router.post("/situations", response_model=ResearchSituationResponse, status_code=status.HTTP_201_CREATED)
+def create_situation(payload: SituationCreateRequest, session: Session = Depends(get_session)):
+    try:
+        situation = ResearchSituationService().create_situation(
+            session,
+            title=payload.title,
+            club_id=payload.club_id,
+            context=payload.context,
+            fpl_relevance=payload.fpl_relevance,
+            status=payload.status,
+            player_ids=payload.player_ids,
+            last_checked_at=payload.last_checked_at,
+        )
+    except LookupError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return _situation_response(situation)
+
+
+@router.get("/situations/{situation_id}", response_model=ResearchSituationResponse)
+def get_situation(situation_id: str, session: Session = Depends(get_session)):
+    situation = ResearchSituationService().get_situation(session, situation_id)
+    if situation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ResearchSituation not found")
+    return _situation_response(situation)
+
+
+@router.patch("/situations/{situation_id}", response_model=ResearchSituationResponse)
+def update_situation(situation_id: str, payload: SituationUpdateRequest, session: Session = Depends(get_session)):
+    try:
+        situation = ResearchSituationService().update_situation(
+            session,
+            situation_id,
+            title=payload.title,
+            club_id=payload.club_id,
+            context=payload.context,
+            fpl_relevance=payload.fpl_relevance,
+            status=payload.status,
+            last_checked_at=payload.last_checked_at,
+            touch_last_checked=payload.touch_last_checked,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return _situation_response(situation)
+
+
+@router.post("/situations/{situation_id}/players", response_model=ResearchSituationResponse)
+def attach_situation_players(
+    situation_id: str,
+    payload: SituationPlayersRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        situation = ResearchSituationService().attach_players(session, situation_id, payload.player_ids)
+    except LookupError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _situation_response(situation)
+
+
+@router.post(
+    "/situations/{situation_id}/hypotheses",
+    response_model=SituationHypothesisResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_situation_hypothesis(
+    situation_id: str,
+    payload: SituationHypothesisRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        return ResearchSituationService().add_hypothesis(
+            session, situation_id, statement=payload.statement, active=payload.active
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.post("/situations/{situation_id}/triggers", response_model=dict)
+def attach_situation_trigger(
+    situation_id: str,
+    payload: SituationAttachTriggerRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        trigger: PlayerResearchTrigger = ResearchSituationService().attach_trigger(session, situation_id, payload.trigger_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return {"trigger_id": trigger.id, "situation_id": trigger.situation_id}
+
+
+@router.post("/situations/{situation_id}/threads", response_model=dict)
+def attach_situation_thread(
+    situation_id: str,
+    payload: SituationAttachThreadRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        thread: ResearchThread = ResearchSituationService().attach_thread(session, situation_id, payload.thread_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return {"thread_id": thread.id, "situation_id": thread.situation_id}
 
 
 @router.post("/threads/{thread_id}/collect")

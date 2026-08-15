@@ -12,6 +12,7 @@ from fpl_intelligence.integrations.fpl.errors import OfficialFPLError
 from fpl_intelligence.integrations.fpl.snapshot import FPLSnapshotService
 from fpl_intelligence.models import Player, WatchlistEntry
 from fpl_intelligence.research.persistence import ResearchPersistenceService
+from fpl_intelligence.research.situations import ResearchSituationService
 from fpl_intelligence.watchlist.service import WatchlistService
 from fpl_intelligence.watchlist.pulse import PlayerPulseService
 from fpl_intelligence.watchlist.triggers import TriggerService
@@ -80,6 +81,7 @@ class PlayerCollectedLinkResponse(BaseModel):
 class PlayerDetailsResponse(BaseModel):
     player: PlayerIdentityResponse
     watchlist: "PlayerWatchlistResponse"
+    current_research_context: list["PlayerSituationContextResponse"]
     completed_research: list[PlayerResearchResultResponse]
     collected_sources: list[PlayerCollectedLinkResponse]
     recent_pulses: list["PlayerGameweekPulseResponse"]
@@ -135,6 +137,26 @@ class PlayerWatchlistResponse(BaseModel):
     added_at: datetime | None
 
 
+class SituationInvolvedPlayerResponse(BaseModel):
+    player_id: int
+    player_name: str
+    club: str
+    position: str
+
+
+class SituationActiveHypothesisResponse(BaseModel):
+    id: str
+    statement: str
+
+
+class PlayerSituationContextResponse(BaseModel):
+    situation_id: str
+    title: str
+    status: str
+    involved_players: list[SituationInvolvedPlayerResponse]
+    active_hypotheses: list[SituationActiveHypothesisResponse]
+
+
 class PlayerResearchThreadResponse(BaseModel):
     thread_id: str
     title: str
@@ -176,6 +198,35 @@ def _snapshot(request: Request):
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={"code": exc.code, "message": str(exc)},
         ) from exc
+
+
+def _situation_context_response(situations, request: Request) -> list[PlayerSituationContextResponse]:
+    official = {player.id: player for player in _snapshot(request).players}
+    response = []
+    for situation in situations:
+        involved = []
+        for player in sorted(situation.players, key=lambda item: item.id):
+            official_player = official.get(player.id)
+            if official_player is None:
+                continue
+            involved.append(SituationInvolvedPlayerResponse(
+                player_id=official_player.id,
+                player_name=official_player.display_name,
+                club=official_player.club_name,
+                position=official_player.position,
+            ))
+        response.append(PlayerSituationContextResponse(
+            situation_id=situation.id,
+            title=situation.title,
+            status=situation.status,
+            involved_players=involved,
+            active_hypotheses=[
+                SituationActiveHypothesisResponse(id=item.id, statement=item.statement)
+                for item in situation.hypotheses
+                if item.active
+            ],
+        ))
+    return response
 
 
 @router.get("/players", response_model=list[PlayerSearchResponse])
@@ -227,6 +278,7 @@ def get_player_details(
     watchlist = WatchlistService().get(session, player_id)
     pulses = PlayerPulseService.recent_history(session, player_id, limit=5)
     triggers, monitors = TriggerService.player_triggers(session, player_id)
+    situations = ResearchSituationService().list_for_player(session, player_id)
     return PlayerDetailsResponse(
         player=PlayerIdentityResponse.model_validate(official, from_attributes=True),
         watchlist=PlayerWatchlistResponse(
@@ -236,6 +288,7 @@ def get_player_details(
             addition_reason=watchlist.addition_reason if watchlist and watchlist.active else None,
             added_at=watchlist.added_at if watchlist and watchlist.active else None,
         ),
+        current_research_context=_situation_context_response(situations, request),
         completed_research=[
             PlayerResearchResultResponse(
                 id=result.id,
@@ -274,6 +327,17 @@ def get_player_details(
         research_triggers=[trigger_response(item) for item in triggers],
         monitoring_triggers=[monitoring_response(item) for item in monitors],
     )
+
+
+@router.get("/players/{player_id}/situations", response_model=list[PlayerSituationContextResponse])
+def get_player_situations(
+    player_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    if session.get(Player, player_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Player not found")
+    return _situation_context_response(ResearchSituationService().list_for_player(session, player_id), request)
 
 
 @router.post(

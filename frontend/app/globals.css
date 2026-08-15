@@ -44,6 +44,10 @@ section { margin-top: 2.75rem; }
 .trigger-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: grid; gap: .45rem; padding: .8rem; }
 .trigger-card > div { display: flex; gap: .35rem; }
 .trigger-card small { color: var(--muted); text-transform: capitalize; }
+.context-list { display: grid; gap: .65rem; }
+.context-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: grid; gap: .55rem; padding: .9rem; }
+.context-card ul { color: #dce9e0; margin: .1rem 0 0; padding-left: 1.1rem; }
+.context-players { color: var(--muted); font-size: .86rem; margin-bottom: 0; }
 .home-link, .text-action { color: var(--lime); font-weight: 800; }
 .crumb { color: var(--muted); font-size: .78rem; margin-bottom: 2rem; }
 .watchlist-header { padding-bottom: 1rem; }

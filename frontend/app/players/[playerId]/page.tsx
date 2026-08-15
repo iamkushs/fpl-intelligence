@@ -26,6 +26,11 @@ type PlayerDetails = {
     chance_of_playing_next_round: number | null; news: string | null;
   };
   watchlist: { active: boolean; pinned: boolean; added_source: string | null; addition_reason: string | null; added_at: string | null };
+  current_research_context: Array<{
+    situation_id: string; title: string; status: string;
+    involved_players: Array<{ player_id: number; player_name: string; club: string; position: string }>;
+    active_hypotheses: Array<{ id: string; statement: string }>;
+  }>;
   completed_research: ResearchResult[];
   collected_sources: CollectedSource[];
   recent_pulses: Array<{
@@ -88,6 +93,20 @@ export default async function PlayerPage({ params }: { params: Promise<{ playerI
       <section aria-labelledby="trigger-heading">
         <div className="section-heading"><div><p className="eyebrow">Why investigate</p><h2 id="trigger-heading">Research triggers</h2></div><span>{data.research_triggers.length}</span></div>
         {data.research_triggers.length ? <div className="trigger-list">{data.research_triggers.map(trigger => <article className="trigger-card" key={trigger.id}><div><span className={`status status-${trigger.status}`}>{trigger.status}</span><span className="thread-tag">{trigger.source}</span></div><strong>{trigger.description}</strong><small>{trigger.trigger_type.replaceAll("_", " ")}{trigger.gameweek ? ` · GW${trigger.gameweek}` : ""}</small></article>)}</div> : <p className="muted">No research triggers recorded.</p>}
+      </section>
+
+      <section aria-labelledby="context-heading">
+        <div className="section-heading"><div><p className="eyebrow">Situation</p><h2 id="context-heading">Current Research Context</h2></div><span>{data.current_research_context.length}</span></div>
+        {data.current_research_context.length ? (
+          <div className="context-list">{data.current_research_context.map((situation) => (
+            <article className="context-card" key={situation.situation_id}>
+              <div className="card-top"><span className={`status status-${situation.status}`}>{situation.status}</span><span className="thread-tag">{situation.involved_players.length} player{situation.involved_players.length === 1 ? "" : "s"}</span></div>
+              <h3>{situation.title}</h3>
+              <p className="context-players">{situation.involved_players.map(player => `${player.player_name} (${player.position})`).join(", ")}</p>
+              {situation.active_hypotheses.length ? <ul>{situation.active_hypotheses.map(hypothesis => <li key={hypothesis.id}>{hypothesis.statement}</li>)}</ul> : null}
+            </article>
+          ))}</div>
+        ) : <p className="muted">No current research situation recorded.</p>}
       </section>
 
       <section aria-labelledby="monitoring-heading">

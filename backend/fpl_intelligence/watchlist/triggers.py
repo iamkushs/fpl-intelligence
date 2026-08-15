@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from fpl_intelligence.models import (
     MonitoringTrigger,
@@ -12,6 +12,8 @@ from fpl_intelligence.models import (
     PlayerGameweekPulse,
     PlayerResearchTrigger,
     ResearchResult,
+    ResearchSituation,
+    ResearchSituationStatus,
     ResearchTriggerSource,
     ResearchTriggerStatus,
     WatchlistEntry,
@@ -67,6 +69,7 @@ class ResearchQueueItem:
     primary_trigger: PlayerResearchTrigger
     from_previous_monitoring: bool
     most_recent_research_at: datetime | None
+    situation: ResearchSituation | None = None
 
 
 class TriggerService:
@@ -338,19 +341,29 @@ class TriggerService:
             func.max(ResearchResult.researched_at).label("latest"),
         ).join(ResearchResult, ResearchResult.id == research_result_players.c.research_result_id)
          .group_by(research_result_players.c.player_id).subquery())
-        rows = session.execute(select(PlayerResearchTrigger, latest_research.c.latest).outerjoin(
-            latest_research, latest_research.c.player_id == PlayerResearchTrigger.player_id
-        ).where(PlayerResearchTrigger.status.in_(ResearchTriggerStatus.ACTIVE)).order_by(
-            PlayerResearchTrigger.priority.desc(), PlayerResearchTrigger.created_at.asc()
-        )).all()
+        rows = session.execute(
+            select(PlayerResearchTrigger, latest_research.c.latest)
+            .outerjoin(latest_research, latest_research.c.player_id == PlayerResearchTrigger.player_id)
+            .where(PlayerResearchTrigger.status.in_(ResearchTriggerStatus.ACTIVE))
+            .options(selectinload(PlayerResearchTrigger.situation).selectinload(ResearchSituation.players))
+            .order_by(PlayerResearchTrigger.priority.desc(), PlayerResearchTrigger.created_at.asc())
+        ).all()
         grouped: dict[int, ResearchQueueItem] = {}
         for trigger, latest in rows:
+            open_situation = (
+                trigger.situation
+                if trigger.situation is not None and trigger.situation.status in ResearchSituationStatus.ACTIVE
+                else None
+            )
             item = grouped.get(trigger.player_id)
             if item is None:
                 grouped[trigger.player_id] = ResearchQueueItem(
-                    trigger.player_id, [trigger], trigger, trigger.monitoring_trigger_id is not None, latest
+                    trigger.player_id, [trigger], trigger, trigger.monitoring_trigger_id is not None, latest,
+                    open_situation,
                 )
             else:
                 item.triggers.append(trigger)
                 item.from_previous_monitoring = item.from_previous_monitoring or trigger.monitoring_trigger_id is not None
+                if item.situation is None and open_situation is not None:
+                    item.situation = open_situation
         return list(grouped.values())
