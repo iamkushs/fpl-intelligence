@@ -10,6 +10,7 @@ from typing import Any
 
 from .app_server import CodexAppServer
 from .config import RunnerConfig
+from .dependencies import cycle_members, parse_dependencies
 from .github import GitHubClient
 from .logging import StructuredLogger, exception_location
 from .maintenance import MaintenancePolicy
@@ -49,6 +50,52 @@ class Orchestrator:
         return (not issue.is_pull_request and issue.state.lower() in self.config.active_states
             and all(label in labels for label in self.config.required_labels)
             and "symphony-review" not in labels and "symphony-blocked" not in labels)
+
+    def _queue_record(self, issue: Issue) -> RunRecord:
+        record = self.store.records.get(issue.number)
+        if record is None:
+            record = RunRecord(issue.number, str(self.workspace.path_for(issue)), self.workspace.branch_for(issue))
+            self.store.records[issue.number] = record
+        record.waiting_for_active_issue = None
+        return record
+
+    def _dependency_state(self, candidates: list[Issue]) -> dict[int, tuple[int, ...]]:
+        graph: dict[int, tuple[int, ...]] = {}
+        errors: dict[int, str] = {}
+        for issue in candidates:
+            try: graph[issue.number] = parse_dependencies(issue)
+            except ConfigurationError as exc: errors[issue.number] = str(exc)
+        cyclic = cycle_members(graph)
+        for issue in candidates:
+            record = self._queue_record(issue)
+            record.blocked_by = []
+            record.eligible = False
+            if issue.number in errors:
+                record.phase, record.status = IssuePhase.BLOCKED.value, "invalid_dependency"
+                record.queue_reason = errors[issue.number]
+                continue
+            if issue.number in cyclic:
+                record.phase, record.status = IssuePhase.BLOCKED.value, "invalid_dependency"
+                record.queue_reason = "dependency cycle detected"
+                continue
+            unresolved = []
+            for number in graph.get(issue.number, ()):
+                dependency = self.github.get_issue(number)
+                if dependency.state.lower() not in self.config.terminal_states:
+                    unresolved.append(number)
+            record.blocked_by = unresolved
+            if unresolved:
+                record.phase, record.status = IssuePhase.WAITING_DEPENDENCY.value, "waiting_dependency"
+                record.queue_reason = "dependencies must be closed"
+            else:
+                record.eligible = self.eligible(issue)
+                if record.phase in {IssuePhase.QUEUED.value, IssuePhase.WAITING_DEPENDENCY.value,
+                                    IssuePhase.WAITING_CAPACITY.value, IssuePhase.BLOCKED.value} and record.status in {
+                                    "pending", "waiting_dependency", "waiting_capacity", "invalid_dependency"}:
+                    record.phase, record.status = IssuePhase.QUEUED.value, "pending"
+                record.queue_reason = None
+        self.store.save()
+        return graph
 
     async def _run_hook(self, name: str, workspace: Workspace) -> None:
         windows_key = f"{name}_windows"
@@ -151,19 +198,23 @@ class Orchestrator:
                         prompt = repair_prompt(issue, pad.body, record, None, decision); continue
                     record.phase = (IssuePhase.EXTERNAL_WAIT.value if decision.verdict == ReviewerVerdict.BLOCKED_EXTERNAL
                                     else IssuePhase.BLOCKED.value)
-                    record.status = "external_wait" if decision.verdict == ReviewerVerdict.BLOCKED_EXTERNAL else "blocked"
+                    record.status = "external_wait" if decision.verdict == ReviewerVerdict.BLOCKED_EXTERNAL else "human_required"
                     break
                 if "symphony-review" in labels and "symphony" not in labels and pr and pad and "### Validation" in pad.body:
+                    record.phase = IssuePhase.HOST_HANDOFF.value
                     record.status = "review"; record.last_error = None; break
                 if "symphony-blocked" in labels and "symphony" not in labels and pad and "### Blockers" in pad.body:
-                    record.status = "blocked"; break
-                if not self.eligible(current): record.status = "ineligible"; break
+                    record.phase = IssuePhase.BLOCKED.value; record.status = "blocked"; break
+                if not self.eligible(current):
+                    self._normalize_ineligible(record, current); break
             else:
                 router.record_productive_failure(record)
                 raise RetryableError("Productive implementation attempt exhausted its turn budget while issue remains eligible")
             self.logger.event("issue_handoff", issue=issue.number, status=record.status, thread_id=record.thread_id)
         except asyncio.CancelledError:
-            record.status = "ineligible"; record.last_activity = utc_now(); self.store.save(); raise
+            try: self._normalize_ineligible(record, self.github.get_issue(issue.number))
+            except RetryableError: record.phase, record.status = IssuePhase.BLOCKED.value, "ineligible"
+            record.last_activity = utc_now(); self.store.save(); raise
         except Exception as exc:
             record.last_error = self.config.redact(str(exc))[:1000]
             incident = record_incident(self.config, record, exc, phase=record.phase)
@@ -194,7 +245,7 @@ class Orchestrator:
                     # Never send runner-infrastructure repairs into the affected product workspace.
                     # The separate bounded maintenance API may be driven by an operator; this issue stays parked.
                     record.parked_for_maintenance = True; record.phase = IssuePhase.BLOCKED.value
-                    record.status = "blocked"; record.retry_at = None
+                    record.status = "maintenance_required"; record.retry_at = None
                 elif decision.rotate_thread and isinstance(exc, AppServerProtocolError):
                     self._rotate_unhealthy_thread(record, issue.number, record.last_error)
                     record.phase = IssuePhase.RECOVERY_PLANNED.value; record.status = "retrying"; record.retry_at = time.time()
@@ -204,7 +255,7 @@ class Orchestrator:
                 record.phase = IssuePhase.EXTERNAL_WAIT.value; record.status = "external_wait"
                 record.retry_at = time.time() + self.config.max_retry_backoff_ms / 1000
             elif decision and decision.verdict == ReviewerVerdict.HUMAN_REQUIRED:
-                record.phase = IssuePhase.BLOCKED.value; record.status = "blocked"; record.retry_at = None
+                record.phase = IssuePhase.BLOCKED.value; record.status = "human_required"; record.retry_at = None
             elif int(current.get("repair_attempts", 0)) >= self.config.max_incident_repairs or record.total_repair_attempts >= self.config.max_issue_repairs:
                 record.phase = IssuePhase.BLOCKED.value; record.status = "blocked"; record.retry_at = None
             elif isinstance(exc, AppServerProtocolError):
@@ -262,7 +313,7 @@ class Orchestrator:
             try: catalog = await probe.model_catalog()
             finally: await probe.close()
         index = int(self._incident_value(record, incident.incident_id).get("repair_attempts", 0)) if incident else record.review_iterations
-        route = self.config.reviewer_routes[min(index, len(self.config.reviewer_routes) - 1)]
+        route = self._reviewer_route(index)
         resolved = ModelRouter.load(catalog, self.config.model_policy_path).resolve(route)
         effort = "high" if "high" in resolved.model.efforts else resolved.effort
         record.reviewer_route, record.reviewer_model_id, record.reviewer_effort = route, resolved.model.id, effort
@@ -295,10 +346,27 @@ class Orchestrator:
             route=route, model=resolved.model.id, effort=effort)
         return decision
 
+    def _reviewer_route(self, diagnosis_index: int) -> str:
+        """Bounded ordinary progression: 5.5 high, Terra high, then Sol high."""
+        return self.config.reviewer_routes[min(max(diagnosis_index, 0), 2, len(self.config.reviewer_routes) - 1)]
+
     @staticmethod
     def _git_read(path: Path, *args: str) -> str:
-        result = subprocess.run(["git", *args], cwd=path, capture_output=True, text=True, check=False)
+        result = subprocess.run(["git", *args], cwd=path, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", check=False)
         return (result.stdout if result.returncode == 0 else result.stderr)[:20000]
+
+    @staticmethod
+    def _normalize_ineligible(record: RunRecord, issue: Issue) -> None:
+        labels = {value.lower() for value in issue.labels}
+        if "symphony-review" in labels:
+            record.phase, record.status = IssuePhase.HOST_HANDOFF.value, "review"
+        elif "symphony-blocked" in labels:
+            record.phase, record.status = IssuePhase.BLOCKED.value, "blocked"
+        elif issue.state.lower() == "closed":
+            record.phase, record.status = IssuePhase.HOST_HANDOFF.value, "complete"
+        else:
+            record.phase, record.status = IssuePhase.BLOCKED.value, "ineligible"
 
     def _apply_review(self, record: RunRecord, decision: ReviewerDecision, incident: Incident | None) -> None:
         record.reviewer_verdict = decision.verdict.value; record.review_iterations += 1
@@ -324,7 +392,8 @@ class Orchestrator:
     @staticmethod
     def _authoritative_class(current: str, proposed: FailureClass) -> FailureClass:
         protected = {FailureClass.APP_SERVER_PROTOCOL, FailureClass.APP_SERVER_CONTEXT,
-            FailureClass.GIT_HOST, FailureClass.EXTERNAL_SERVICE}
+            FailureClass.GIT_HOST, FailureClass.EXTERNAL_SERVICE, FailureClass.ENVIRONMENT,
+            FailureClass.INFRASTRUCTURE}
         current_value = FailureClass(current)
         return current_value if current_value in protected else proposed
 
@@ -376,15 +445,21 @@ class Orchestrator:
             try: current = self.github.get_issue(number)
             except RetryableError: continue
             if not self.eligible(current): task.cancel()
-        candidates = self.github.list_candidates(self.config.required_labels)
+        candidates = sorted(self.github.list_candidates(self.config.required_labels), key=lambda value: value.number)
+        self._dependency_state(candidates)
         capacity = self.config.max_concurrent_agents - len(self.running)
         for issue in candidates:
-            if capacity <= 0: break
             record = self.store.records.get(issue.number)
-            if issue.number in self.running or not self.eligible(issue): continue
+            if issue.number in self.running or not record or not record.eligible: continue
             if record and record.retry_at and record.retry_at > time.time(): continue
+            if capacity <= 0:
+                record.phase, record.status = IssuePhase.WAITING_CAPACITY.value, "waiting_capacity"
+                record.waiting_for_active_issue = min(self.running) if self.running else None
+                record.queue_reason = "serial capacity is occupied"
+                continue
             self.running[issue.number] = asyncio.create_task(self._execute_issue(issue), name=issue.identifier)
             capacity -= 1
+        self.store.save()
 
     async def run(self) -> None:
         server = StatusServer(self.config.status_host, self.config.status_port, self.snapshot); server.start()

@@ -23,7 +23,7 @@ hooks:
     - .\scripts\verify-agent-runtime.ps1 -AllowMissingGitHubAuth
   timeout_ms: 600000
 agent:
-  max_concurrent_agents: 2
+  max_concurrent_agents: 1
   max_turns: 20
 recovery:
   max_incident_repairs: 3
@@ -68,6 +68,10 @@ Research and application state belong in PostgreSQL/database persistence, not ge
 - `symphony-blocked`: a true external blocker prevents completion; the open issue must not have `symphony` and the blocker must be recorded in its workpad.
 
 Do not close an implementation issue merely to stop polling. Do not rely on Symphony's in-memory blocked state.
+
+Queue dependencies use one exact issue-body line: `Depends-On: #10` or `Depends-On: #10, #11`.
+References are same-repository issue numbers and all must be closed before the issue is eligible. A predecessor
+PR is not sufficient. Malformed, duplicate, self-referential, and cyclic declarations fail visibly and safely.
 
 ## Start or resume
 

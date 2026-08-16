@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,15 @@ class StateStore:
         temp = self.path.with_suffix(".tmp")
         payload: dict[str, Any] = {"version": 2, "issues": {str(key): value.to_dict() for key, value in self.records.items()}}
         temp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(temp, self.path)
+        for attempt in range(5):
+            try:
+                os.replace(temp, self.path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                # Windows scanners/readers can briefly hold the destination.
+                time.sleep(0.01 * (attempt + 1))
 
 
 class RunnerLock:

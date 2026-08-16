@@ -32,7 +32,8 @@ class WorkspaceManager:
         return self.root / issue.identifier
 
     def _git(self, cwd: Path | None, *args: str) -> str:
-        result = self._run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
+        result = self._run(["git", *args], cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", check=False)
         if result.returncode:
             raise RetryableError(f"git {' '.join(args)} failed: {(result.stderr or result.stdout).strip()[:500]}")
         return result.stdout.strip()
@@ -52,7 +53,8 @@ class WorkspaceManager:
         if branches:
             self._git(path, "switch", branch)
         else:
-            remote_exists = self._run(["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{branch}"], cwd=path).returncode == 0
+            remote_exists = self._run(["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{branch}"], cwd=path,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", check=False).returncode == 0
             if remote_exists:
                 self._git(path, "switch", "--track", f"origin/{branch}")
             else:
@@ -90,7 +92,8 @@ class HostGitLifecycle:
         return self._git_output(path, *args).strip()
 
     def _git_output(self, path: Path, *args: str) -> str:
-        result = self._run(["git", *args], cwd=path, capture_output=True, text=True, encoding="utf-8", check=False)
+        result = self._run(["git", *args], cwd=path, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", check=False)
         if result.returncode:
             raise RetryableError(f"host git {' '.join(args)} failed: {(result.stderr or result.stdout).strip()[:500]}")
         return result.stdout
@@ -134,7 +137,8 @@ class HostGitLifecycle:
                 raise ConfigurationError(f"Refusing runtime/artifact path: {name}")
             if name.lower().endswith(".md") and name not in self.ALLOWED_MARKDOWN:
                 raise ConfigurationError(f"Markdown policy rejects: {name}")
-            ignored = self._run(["git", "check-ignore", "--quiet", "--", name], cwd=root, capture_output=True, text=True, encoding="utf-8", check=False)
+            ignored = self._run(["git", "check-ignore", "--quiet", "--", name], cwd=root, capture_output=True,
+                text=True, encoding="utf-8", errors="replace", check=False)
             if ignored.returncode == 0:
                 raise ConfigurationError(f"Refusing ignored path: {name}")
 
@@ -152,7 +156,8 @@ class HostGitLifecycle:
         script = workspace.path / "scripts" / ("verify-all.ps1" if os.name == "nt" else "verify-all.sh")
         command = (["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script)]
                    if os.name == "nt" else ["bash", str(script)])
-        result = self._run(command, cwd=workspace.path, capture_output=True, text=True, check=False)
+        result = self._run(command, cwd=workspace.path, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", check=False)
         if result.returncode:
             raise ConfigurationError(f"host verification failed: {(result.stderr or result.stdout).strip()[-1000:]}")
 

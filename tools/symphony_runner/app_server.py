@@ -82,7 +82,8 @@ class CodexAppServer:
 
     @staticmethod
     def version() -> str:
-        result = subprocess.run(executable_command(["codex", "--version"]), capture_output=True, text=True, check=True)
+        result = subprocess.run(executable_command(["codex", "--version"]), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", check=True)
         return result.stdout.strip()
 
     @staticmethod
@@ -90,7 +91,8 @@ class CodexAppServer:
         if not shutil.which("codex"):
             raise AppServerError("codex executable not found")
         with tempfile.TemporaryDirectory() as directory:
-            result = subprocess.run(executable_command(["codex", "app-server", "generate-json-schema", "--experimental", "--out", directory]), capture_output=True, text=True)
+            result = subprocess.run(executable_command(["codex", "app-server", "generate-json-schema", "--experimental", "--out", directory]),
+                capture_output=True, text=True, encoding="utf-8", errors="replace")
             required = [Path(directory) / "v2" / "ThreadStartParams.json", Path(directory) / "v2" / "TurnStartParams.json", Path(directory) / "v2" / "ModelListResponse.json", Path(directory) / "DynamicToolCallParams.json"]
             if result.returncode or not all(path.is_file() for path in required):
                 raise AppServerError("installed Codex App Server schema is incompatible")
@@ -143,7 +145,7 @@ class CodexAppServer:
             line = exc.partial
         if not line:
             detail = ""
-            if self.process.stderr: detail = (await self.process.stderr.read()).decode(errors="replace")[-500:]
+            if self.process.stderr: detail = (await self.process.stderr.read()).decode("utf-8", errors="replace")[-500:]
             raise AppServerError(f"Codex App Server exited unexpectedly: {detail}")
         return decode_json_message(line)
 

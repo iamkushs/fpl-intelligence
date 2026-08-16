@@ -35,7 +35,7 @@ class MaintenancePolicy:
 
     @staticmethod
     def eligible(incident: Incident, confidence: str) -> bool:
-        return incident.failure_class in {"INFRASTRUCTURE", "APP_SERVER_PROTOCOL", "APP_SERVER_CONTEXT"} and confidence == "high"
+        return incident.failure_class in {"INFRASTRUCTURE", "ENVIRONMENT", "APP_SERVER_PROTOCOL", "APP_SERVER_CONTEXT"} and confidence == "high"
 
     @classmethod
     def run_cli_repair(cls, config: RunnerConfig, workspace: Workspace, prompt: str,
@@ -44,7 +44,7 @@ class MaintenancePolicy:
         command = executable_command(["codex", "exec", "--ephemeral", "--ignore-user-config",
             "-c", 'approval_policy="never"', "--sandbox", "workspace-write", "--model", model,
             "-C", str(workspace.path), "-"])
-        result = subprocess.run(command, input=prompt, text=True, capture_output=True,
+        result = subprocess.run(command, input=prompt, text=True, encoding="utf-8", errors="replace", capture_output=True,
             env=config.sanitized_child_environment(), timeout=config.rescue_timeout_ms / 1000, check=False)
         if result.returncode:
             raise AppServerError(f"bounded maintenance rescue failed with exit code {result.returncode}: {config.redact(result.stderr)[-500:]}")

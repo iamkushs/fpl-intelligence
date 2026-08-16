@@ -38,7 +38,7 @@ class RunnerConfig:
     active_states: tuple[str, ...] = ("open",)
     terminal_states: tuple[str, ...] = ("closed",)
     poll_interval_ms: int = 30_000
-    max_concurrent_agents: int = 2
+    max_concurrent_agents: int = 1
     max_turns: int = 20
     max_retry_backoff_ms: int = 300_000
     codex_command: tuple[str, ...] = ("codex", "app-server")
@@ -96,7 +96,7 @@ class RunnerConfig:
             active_states=tuple(str(v).strip().lower() for v in tracker.get("active_states", ["open"])),
             terminal_states=tuple(str(v).strip().lower() for v in tracker.get("terminal_states", ["closed"])),
             poll_interval_ms=int(polling.get("interval_ms", 30_000)),
-            max_concurrent_agents=int(agent.get("max_concurrent_agents", 2)),
+            max_concurrent_agents=int(agent.get("max_concurrent_agents", 1)),
             max_turns=int(agent.get("max_turns", 20)),
             max_retry_backoff_ms=int(agent.get("max_retry_backoff_ms", 300_000)),
             codex_command=tuple(command), approval_policy=str(codex.get("approval_policy", "never")),

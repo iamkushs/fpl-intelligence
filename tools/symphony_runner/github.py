@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
-from .models import Issue, RetryableError
+from .models import GitHubOutputError, GitHubServiceError, Issue, RetryableError
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -26,22 +26,29 @@ class GitHubClient:
         if self.token:
             env["GH_TOKEN"] = self.token
         command = ["gh", *args]
-        result = self._run(command, capture_output=True, text=True, env=env, check=False)
+        try:
+            result = self._run(command, capture_output=True, text=True, encoding="utf-8", errors="strict", env=env, check=False)
+        except UnicodeDecodeError as exc:
+            raise GitHubOutputError(f"GitHub CLI output was not valid UTF-8 at byte {exc.start}") from exc
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise GitHubOutputError(f"GitHub CLI local process failed: {type(exc).__name__}: {exc}") from exc
         if result.returncode:
             message = (result.stderr or result.stdout).strip()
-            raise RetryableError(f"GitHub operation failed: {message[:500]}")
+            raise GitHubServiceError(f"GitHub CLI exited {result.returncode}: {message[:500] or 'no diagnostic output'}")
         if not isinstance(result.stdout, str):
-            raise RetryableError("GitHub CLI returned no stdout value")
+            raise GitHubOutputError("GitHub CLI returned no stdout value")
         return result.stdout
 
     @staticmethod
     def _decode(raw: str, operation: str) -> Any:
         if not isinstance(raw, str):
-            raise RetryableError(f"GitHub {operation} returned no JSON text")
+            raise GitHubOutputError(f"GitHub {operation} returned no JSON text")
+        if not raw.strip():
+            raise GitHubOutputError(f"GitHub {operation} returned empty required JSON output")
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise RetryableError(f"GitHub {operation} returned malformed JSON") from exc
+            raise GitHubOutputError(f"GitHub {operation} returned malformed JSON at character {exc.pos}") from exc
 
     @staticmethod
     def _issue(value: dict[str, Any]) -> Issue:

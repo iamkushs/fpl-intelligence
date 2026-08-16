@@ -4,7 +4,7 @@ import subprocess
 import pytest
 
 from tools.symphony_runner.github import GitHubClient
-from tools.symphony_runner.models import RetryableError
+from tools.symphony_runner.models import GitHubOutputError, GitHubServiceError, RetryableError
 
 
 class FakeRun:
@@ -41,3 +41,32 @@ def test_tools_reject_unrestricted_label():
 def test_retryable_github_error():
     def fail(command,**kwargs): return subprocess.CompletedProcess(command,1,"","temporary")
     with pytest.raises(RetryableError): GitHubClient("o/r",run=fail).list_candidates(("symphony",))
+
+
+def test_gh_uses_strict_utf8_and_accepts_windows_regression_character():
+    seen = {}
+    def run(command, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, '[{"number":1,"title":"🙂","state":"open"}]', "")
+    assert GitHubClient("o/r", run=run).list_candidates(())[0].title == "🙂"
+    assert seen["encoding"] == "utf-8" and seen["errors"] == "strict"
+
+
+@pytest.mark.parametrize("stdout, message", [(None, "no stdout"), ("", "empty required"), ("{", "malformed JSON")])
+def test_required_gh_json_output_errors_are_typed(stdout, message):
+    def run(command, **kwargs): return subprocess.CompletedProcess(command, 0, stdout, "")
+    with pytest.raises(GitHubOutputError, match=message):
+        GitHubClient("o/r", run=run).list_candidates(())
+
+
+def test_malformed_utf8_is_local_output_error_not_service_error():
+    def run(command, **kwargs): raise UnicodeDecodeError("utf-8", b"\x9d", 0, 1, "invalid start byte")
+    with pytest.raises(GitHubOutputError, match="valid UTF-8") as caught:
+        GitHubClient("o/r", run=run).list_candidates(())
+    assert not isinstance(caught.value, GitHubServiceError)
+
+
+def test_nonzero_gh_exit_is_typed_service_error():
+    def run(command, **kwargs): return subprocess.CompletedProcess(command, 4, "", "authentication failed")
+    with pytest.raises(GitHubServiceError, match="authentication failed"):
+        GitHubClient("o/r", run=run).list_candidates(())

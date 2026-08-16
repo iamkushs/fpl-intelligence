@@ -3,7 +3,7 @@ import json
 import pytest
 
 from tools.symphony_runner.config import RunnerConfig
-from tools.symphony_runner.models import (AppServerProtocolError, Confidence, FailureClass,
+from tools.symphony_runner.models import (AppServerProtocolError, Confidence, FailureClass, GitHubServiceError,
     ReviewerDecision, ReviewerVerdict, RunRecord, RunnerPaths, failure_signature)
 from tools.symphony_runner.recovery import classify_failure, record_incident
 from tools.symphony_runner.maintenance import MaintenancePolicy
@@ -55,3 +55,16 @@ def test_deterministic_classification_is_authoritative_for_protocol():
 def test_maintenance_scope_is_narrow_and_workspace_is_separate(tmp_path):
     MaintenancePolicy.validate_paths(["tools/symphony_runner/app_server.py", "backend/tests/symphony/test_app_server.py", "WORKFLOW.md"])
     with pytest.raises(Exception, match="out-of-scope"): MaintenancePolicy.validate_paths(["backend/fpl_intelligence/api.py"])
+
+
+def test_unicode_decode_error_is_environment_not_external_service(tmp_path):
+    exc = UnicodeDecodeError("utf-8", b"\x9d", 0, 1, "invalid start byte")
+    assert classify_failure(exc, "coding") == FailureClass.ENVIRONMENT
+    assert classify_failure(exc, "coding") != FailureClass.EXTERNAL_SERVICE
+    record = RunRecord(8, "product-workspace", "branch")
+    incident = record_incident(config(tmp_path), record, exc, phase="coding")
+    assert MaintenancePolicy.eligible(incident, "high")
+
+
+def test_genuine_github_remote_failure_is_external_service():
+    assert classify_failure(GitHubServiceError("GitHub authentication failed"), "coding") == FailureClass.EXTERNAL_SERVICE

@@ -27,6 +27,25 @@ def test_prepare_reuses_isolated_workspace_and_rerere(tmp_path):
     assert subprocess.run(["git","config","--get","rerere.enabled"],cwd=again.path,capture_output=True,text=True).stdout.strip()=="true"
 
 
+def test_new_dependent_workspace_refreshes_current_origin_main(tmp_path):
+    bare = origin(tmp_path); manager = WorkspaceManager(tmp_path / "spaces", "o/r"); manager.clone_url = str(bare)
+    manager.prepare(Issue(10, "NR10", "", ("symphony",), "open", "u"))
+    upstream = tmp_path / "merged"; git(tmp_path, "clone", str(bare), str(upstream))
+    git(upstream, "config", "user.email", "test@example.com"); git(upstream, "config", "user.name", "Test")
+    (upstream / "nr10.txt").write_text("merged", encoding="utf-8")
+    git(upstream, "add", "nr10.txt"); git(upstream, "commit", "-m", "merge NR10"); git(upstream, "push", "origin", "main")
+    dependent = manager.prepare(Issue(11, "NR11", "Depends-On: #10", ("symphony",), "open", "u"))
+    assert (dependent.path / "nr10.txt").read_text(encoding="utf-8") == "merged"
+
+
+def test_git_capture_uses_explicit_utf8_and_retains_human_diagnostics(tmp_path):
+    calls = []
+    def run(command, **kwargs):
+        calls.append(kwargs); return subprocess.CompletedProcess(command, 0, "🙂\n", "")
+    assert WorkspaceManager(tmp_path, "o/r", run=run)._git(None, "--version") == "🙂"
+    assert calls[0]["encoding"] == "utf-8" and calls[0]["errors"] == "replace"
+
+
 def test_cleanup_requires_eligibility_and_supports_dry_run(tmp_path):
     manager=WorkspaceManager(tmp_path/"spaces","o/r"); issue=Issue(3,"","",(),"closed","")
     path=manager.path_for(issue); path.mkdir(parents=True)

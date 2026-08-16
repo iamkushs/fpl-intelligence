@@ -70,7 +70,10 @@ def main(argv: list[str] | None = None) -> int:
                              "repair_attempt": incident.get("repair_attempts", 0)},
                 "productive_failure_count": record.productive_failure_count,
                 "escalation": record.escalation_level, "thread_rotations": record.thread_rotations,
-                "parked_for_infrastructure_repair": record.parked_for_maintenance}
+                "parked_for_infrastructure_repair": record.parked_for_maintenance,
+                "eligible": record.eligible, "blocked_by": record.blocked_by,
+                "waiting_for_active_issue": record.waiting_for_active_issue,
+                "queue_reason": record.queue_reason}
         print(json.dumps(compact, indent=2)); return 0
     config = load_workflow(Path(getattr(args, "workflow", "WORKFLOW.md")))
     assert config.paths

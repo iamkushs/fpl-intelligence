@@ -11,7 +11,7 @@ from .app_server import executable_command
 from .config import RunnerConfig
 from .models import (AppServerError, AppServerMessageTooLarge, AppServerProtocolError,
     AppServerThreadUnavailable, ConfigurationError, FailureClass, Incident, Issue,
-    ReviewerDecision, ReviewerVerdict, RetryableError, RunRecord, failure_signature, utc_now)
+    GitHubServiceError, ReviewerDecision, ReviewerVerdict, RetryableError, RunRecord, failure_signature, utc_now)
 
 REVIEWER_SCHEMA: dict[str, Any] = {
     "type": "object", "additionalProperties": False,
@@ -37,10 +37,12 @@ def classify_failure(exc: BaseException, phase: str, failed_step: str | None = N
     if isinstance(exc, AppServerThreadUnavailable): return FailureClass.APP_SERVER_CONTEXT
     if isinstance(exc, (AppServerProtocolError, AppServerMessageTooLarge)): return FailureClass.APP_SERVER_PROTOCOL
     if isinstance(exc, AppServerError): return FailureClass.MODEL_FAILURE
+    if isinstance(exc, UnicodeDecodeError): return FailureClass.ENVIRONMENT
+    if isinstance(exc, (BrokenPipeError, subprocess.SubprocessError)): return FailureClass.INFRASTRUCTURE
+    if isinstance(exc, GitHubServiceError): return FailureClass.EXTERNAL_SERVICE
     text = str(exc).lower()
     if "productive implementation attempt" in text: return FailureClass.PRODUCT_IMPLEMENTATION
     if failed_step or "verification failed" in text or "test" in text: return FailureClass.PRODUCT_TEST_FAILURE
-    if "github" in text: return FailureClass.EXTERNAL_SERVICE
     if "host git" in text or text.startswith("git "): return FailureClass.GIT_HOST
     if "network" in text or "timed out" in text: return FailureClass.NETWORK
     if isinstance(exc, ConfigurationError): return FailureClass.ENVIRONMENT
@@ -58,7 +60,7 @@ def safe_exception_bundle(config: RunnerConfig, exc: BaseException, *, issue: in
     trace = "\n".join(f"{Path(f.filename).name}:{f.lineno} in {f.name}" for f in safe_frames)
     def version(command: list[str]) -> str | None:
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=5, check=False)
+            result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, check=False)
             return result.stdout.strip()[:100] if result.returncode == 0 else None
         except (OSError, subprocess.SubprocessError): return None
     return {"exception_type": type(exc).__name__, "safe_message": config.redact(str(exc))[:1000],
@@ -127,7 +129,7 @@ def rescue_review(config: RunnerConfig, workspace: Path, prompt: str, model: str
         command = executable_command(["codex", "exec", "--ephemeral", "--ignore-user-config", "--sandbox", "read-only",
             "--model", model, "--output-schema", str(schema), "--output-last-message", str(output), "-C", str(workspace), "-"])
         env = config.sanitized_child_environment()
-        result = subprocess.run(command, input=prompt, text=True, capture_output=True, env=env,
+        result = subprocess.run(command, input=prompt, text=True, encoding="utf-8", errors="replace", capture_output=True, env=env,
             timeout=config.rescue_timeout_ms / 1000, check=False)
         if result.returncode or not output.is_file():
             raise AppServerError(f"bounded Codex CLI rescue review failed with exit code {result.returncode}: {config.redact(result.stderr)[-500:]}")

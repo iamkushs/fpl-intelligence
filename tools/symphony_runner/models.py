@@ -64,6 +64,10 @@ class RunRecord:
     thread_rotations: int = 0
     parked_for_maintenance: bool = False
     coding_completion_summary: str | None = None
+    eligible: bool = False
+    blocked_by: list[int] = field(default_factory=list)
+    waiting_for_active_issue: int | None = None
+    queue_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -94,6 +98,8 @@ class TurnResult:
 
 class IssuePhase(str, Enum):
     QUEUED = "queued"
+    WAITING_DEPENDENCY = "waiting_dependency"
+    WAITING_CAPACITY = "waiting_capacity"
     CODING = "coding"
     VERIFYING = "verifying"
     REVIEWING = "reviewing"
@@ -230,6 +236,18 @@ class RunnerError(RuntimeError):
 
 class RetryableError(RunnerError):
     retryable = True
+
+
+class GitHubError(RetryableError):
+    """Typed GitHub command failure base class."""
+
+
+class GitHubOutputError(GitHubError):
+    """Local stdout capture, UTF-8, or JSON protocol failure."""
+
+
+class GitHubServiceError(GitHubError):
+    """Remote GitHub authentication, connectivity, or service failure."""
 
 
 class AppServerError(RetryableError):
