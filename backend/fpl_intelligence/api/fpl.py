@@ -7,12 +7,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from fpl_intelligence.api.research import get_session
+from fpl_intelligence.api.research import EvidenceResponse, _evidence_responses, get_session
 from fpl_intelligence.integrations.fpl.errors import OfficialFPLError
 from fpl_intelligence.integrations.fpl.snapshot import FPLSnapshotService
 from fpl_intelligence.models import Player, WatchlistEntry
 from fpl_intelligence.research.persistence import ResearchPersistenceService
 from fpl_intelligence.research.situations import ResearchSituationService
+from fpl_intelligence.research.evidence import ResearchEvidenceService
 from fpl_intelligence.watchlist.service import WatchlistService
 from fpl_intelligence.watchlist.pulse import PlayerPulseService
 from fpl_intelligence.watchlist.triggers import TriggerService
@@ -21,6 +22,14 @@ from fpl_intelligence.api.triggers import (
 )
 
 router = APIRouter(prefix="/fpl", tags=["fpl"])
+
+
+@router.get("/players/{player_id}/evidence", response_model=list[EvidenceResponse])
+def get_player_evidence(player_id: int, session: Session = Depends(get_session)):
+    if session.get(Player, player_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Player not found")
+    service = ResearchEvidenceService()
+    return _evidence_responses(service.list_evidence(session, player_id=player_id), service, session)
 
 
 class PlayerIdentityResponse(BaseModel):
