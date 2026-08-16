@@ -32,6 +32,7 @@ from fpl_intelligence.research.situations import ResearchSituationService
 from fpl_intelligence.research.two_stage import PlayerResolver
 from fpl_intelligence.research.source_discovery import Eval2SourceDiscoveryService
 from fpl_intelligence.research.quality import ResearchQualityService, quality_run_state
+from fpl_intelligence.research.quality_execution import Eval2QualityExecutionService
 from fpl_intelligence.repositories.research_persistence import ResearchPersistenceRepository
 from fpl_intelligence.research.evidence import ResearchEvidenceService
 
@@ -670,6 +671,10 @@ def _quality_service(request: Request) -> ResearchQualityService:
     return getattr(request.app.state, "research_quality_service", ResearchQualityService())
 
 
+def _quality_execution_service(request: Request) -> Eval2QualityExecutionService:
+    return request.app.state.eval2_quality_execution_service
+
+
 def _quality_error(exc: Exception):
     if isinstance(exc, LookupError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -739,6 +744,42 @@ def complete_quality_run(run_id: str, payload: QualityRunCompleteRequest, reques
             )
         else:
             raise ValueError("Unknown quality run stage")
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _quality_error(exc)
+    return quality_run_state(updated)
+
+
+@router.post("/quality-runs/{run_id}/execute-reddit", response_model=QualityRunResponse)
+def execute_reddit_quality_run(run_id: str, request: Request, session: Session = Depends(get_session)):
+    service = _quality_execution_service(request)
+    try:
+        result = service.execute_reddit(session, run_id)
+        session.expire_all()
+        updated = service.quality_service.repository.get_run_detail(session, result["run"].id)
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _quality_error(exc)
+    return quality_run_state(updated)
+
+
+@router.post("/quality-runs/{run_id}/execute-counter-search", response_model=QualityRunResponse)
+def execute_counter_search_quality_run(run_id: str, request: Request, session: Session = Depends(get_session)):
+    service = _quality_execution_service(request)
+    try:
+        result = service.execute_counter_search(session, run_id)
+        session.expire_all()
+        updated = service.quality_service.repository.get_run_detail(session, result["run"].id)
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _quality_error(exc)
+    return quality_run_state(updated)
+
+
+@router.post("/quality-runs/{run_id}/execute-freshness", response_model=QualityRunResponse)
+def execute_freshness_quality_run(run_id: str, request: Request, session: Session = Depends(get_session)):
+    service = _quality_execution_service(request)
+    try:
+        result = service.execute_freshness(session, run_id)
+        session.expire_all()
+        updated = service.quality_service.repository.get_run_detail(session, result["run"].id)
     except (LookupError, ValueError) as exc:
         session.rollback(); _quality_error(exc)
     return quality_run_state(updated)
