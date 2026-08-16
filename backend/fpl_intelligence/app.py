@@ -25,6 +25,7 @@ from fpl_intelligence.research.source_discovery import (
     CodexEval2PageResearchProvider,
     Eval2SourceDiscoveryService,
 )
+from fpl_intelligence.research.quality import ResearchQualityService
 from fpl_intelligence.watchlist.discovery import CodexDiscoveryAnalyzer, DiscoveryService
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ def create_app(
     fpl_snapshot_service: FPLSnapshotService | None = None,
     two_stage_research_service: TwoStageResearchService | None = None,
     eval2_source_discovery_service: Eval2SourceDiscoveryService | None = None,
+    research_quality_service: ResearchQualityService | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(title="FPL Intelligence System", version="0.1.0")
@@ -67,6 +69,7 @@ def create_app(
         page_research_provider=CodexEval2PageResearchProvider(app.state.codex_service),
         atomic_provider=CodexEval2AtomicEvidenceProvider(app.state.codex_service),
     )
+    app.state.research_quality_service = research_quality_service or ResearchQualityService()
     app.state.discovery_service = DiscoveryService(CodexDiscoveryAnalyzer(app.state.codex_service))
     app.include_router(research_router)
     app.include_router(fpl_router)

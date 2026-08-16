@@ -375,7 +375,7 @@ class MonitoringTrigger(Base):
     __table_args__ = (
         CheckConstraint(
             "category IN ('appearance', 'minutes', 'attacking_return', 'set_piece', 'availability', "
-            "'team_selection', 'transfer', 'tactical_role', 'fixture', 'manager_comment', 'other')",
+            "'team_selection', 'transfer', 'tactical_role', 'fixture', 'manager_comment', 'freshness', 'other')",
             name="ck_monitoring_triggers_category",
         ),
         Index("ix_monitoring_triggers_player_active", "player_id", "active"),

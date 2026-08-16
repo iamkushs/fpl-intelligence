@@ -74,13 +74,16 @@ class ResearchQualityRepository:
     def get_run(self, session: Session, run_id: str) -> ResearchQualityRun:
         return self._require_run(session, run_id)
 
+    def get_run_detail(self, session: Session, run_id: str) -> ResearchQualityRun:
+        return self._require_run(session, run_id)
+
     def list_runs_for_thread(self, session: Session, thread_id: str) -> list[ResearchQualityRun]:
         self._require(session, ResearchThread, thread_id, "ResearchThread")
-        return list(session.scalars(self._list_statement().where(ResearchQualityRun.thread_id == thread_id)))
+        return list(session.scalars(self._list_statement().where(ResearchQualityRun.thread_id == thread_id).order_by(ResearchQualityRun.created_at.desc(), ResearchQualityRun.id.desc())).unique())
 
     def list_runs_for_player(self, session: Session, player_id: int) -> list[ResearchQualityRun]:
         self._require(session, Player, player_id, "Player")
-        return list(session.scalars(self._list_statement().where(ResearchQualityRun.player_id == player_id)))
+        return list(session.scalars(self._list_statement().where(ResearchQualityRun.player_id == player_id).order_by(ResearchQualityRun.created_at.desc(), ResearchQualityRun.id.desc())).unique())
 
     def update_status(self, session: Session, run_id: str, status: str, failure_reason: str | None = None) -> ResearchQualityRun:
         run = self._require_run(session, run_id)

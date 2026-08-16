@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from fpl_intelligence.models import (
     ResearchEvidence,
     ResearchLink,
+    MonitoringTrigger,
     ResearchQualityRun,
     ResearchQualityStage,
     ResearchQualityStatus,
@@ -118,6 +119,7 @@ class ResearchQualityService:
         evidence_ids: list[str] | None = None,
         checked_at: datetime | None = None,
         superseding_evidence_id: str | None = None,
+        monitoring_condition: dict | None = None,
         partial: bool = False,
     ) -> ResearchQualityRun:
         if outcome not in FRESHNESS_OUTCOMES:
@@ -134,6 +136,7 @@ class ResearchQualityService:
             status=ResearchQualityStatus.PARTIAL if partial else ResearchQualityStatus.COMPLETED,
             checked_at=checked_at or datetime.now(timezone.utc),
             superseding_evidence_id=superseding_evidence_id,
+            monitoring_condition=monitoring_condition if outcome == "unresolved" else None,
         )
 
     def _complete(
@@ -148,6 +151,7 @@ class ResearchQualityService:
         evidence_ids: list[str] | None = None,
         checked_at: datetime | None = None,
         superseding_evidence_id: str | None = None,
+        monitoring_condition: dict | None = None,
     ) -> ResearchQualityRun:
         try:
             run = self.repository.get_run(session, run_id)
@@ -166,11 +170,51 @@ class ResearchQualityService:
             run.superseding_evidence_id = superseding_evidence_id
             run.status = status
             run.completed_at = datetime.now(timezone.utc)
+            if expected_stage == ResearchQualityStage.FRESHNESS and outcome == "unresolved" and monitoring_condition:
+                self._ensure_freshness_monitoring_trigger(session, run, monitoring_condition)
             session.commit()
         except Exception:
             session.rollback()
             raise
         return self.repository.get_run(session, run_id)
+
+    def get_run_detail(self, session: Session, run_id: str) -> dict:
+        return quality_run_state(self.repository.get_run_detail(session, run_id))
+
+    def list_runs_for_thread(self, session: Session, thread_id: str) -> list[dict]:
+        return [quality_run_state(run) for run in self.repository.list_runs_for_thread(session, thread_id)]
+
+    def list_runs_for_player(self, session: Session, player_id: int) -> list[dict]:
+        return [quality_run_state(run) for run in self.repository.list_runs_for_player(session, player_id)]
+
+    @staticmethod
+    def _ensure_freshness_monitoring_trigger(session: Session, run: ResearchQualityRun, condition: dict) -> MonitoringTrigger:
+        existing = session.scalar(
+            select(MonitoringTrigger).where(
+                MonitoringTrigger.player_id == run.player_id,
+                MonitoringTrigger.category == "freshness",
+                MonitoringTrigger.active.is_(True),
+            )
+        )
+        for monitor in session.scalars(
+            select(MonitoringTrigger).where(
+                MonitoringTrigger.player_id == run.player_id,
+                MonitoringTrigger.category == "freshness",
+                MonitoringTrigger.active.is_(True),
+            )
+        ):
+            if monitor.condition == condition:
+                return monitor
+        trigger = MonitoringTrigger(
+            player_id=run.player_id,
+            research_thread_id=run.thread_id,
+            description="Recheck unresolved freshness evidence",
+            category="freshness",
+            condition=condition,
+            active=True,
+        )
+        session.add(trigger)
+        return trigger
 
     @staticmethod
     def _require(session: Session, model, value, label: str):
@@ -188,3 +232,28 @@ class ResearchQualityService:
             session.execute(insert(table).values(**values))
         except IntegrityError:
             session.rollback()
+
+
+def quality_run_state(run: ResearchQualityRun) -> dict:
+    return {
+        "id": run.id,
+        "thread_id": run.thread_id,
+        "player_id": run.player_id,
+        "situation_id": run.situation_id,
+        "stage": run.stage,
+        "status": run.status,
+        "target_evidence_id": run.target_evidence_id,
+        "superseding_evidence_id": run.superseding_evidence_id,
+        "research_cutoff": run.research_cutoff,
+        "prompt_version": run.prompt_version,
+        "challenged_claim": run.challenged_claim,
+        "questions": run.questions,
+        "outcome": run.outcome,
+        "failure_reason": run.failure_reason,
+        "checked_at": run.checked_at,
+        "completed_at": run.completed_at,
+        "created_at": run.created_at,
+        "updated_at": run.updated_at,
+        "link_ids": [link.id for link in sorted(run.links, key=lambda item: item.id)],
+        "evidence_ids": [evidence.id for evidence in sorted(run.evidence, key=lambda item: item.id)],
+    }
