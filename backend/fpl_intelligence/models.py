@@ -94,6 +94,14 @@ situation_players = Table(
     Index("ix_situation_players_player_id", "player_id"),
 )
 
+research_evidence_players = Table(
+    "research_evidence_players",
+    Base.metadata,
+    Column("evidence_id", String(36), ForeignKey("research_evidence.id", ondelete="CASCADE"), primary_key=True),
+    Column("player_id", Integer, ForeignKey("players.id", ondelete="CASCADE"), primary_key=True),
+    Index("ix_research_evidence_players_player_id", "player_id"),
+)
+
 watchlist_suggestion_results = Table(
     "watchlist_suggestion_results",
     Base.metadata,
@@ -129,6 +137,28 @@ class ResearchLinkStatus:
     IGNORED = "ignored"
 
 
+class ResearchEvidenceType:
+    FACT = "fact"
+    STATISTIC = "statistic"
+    REPORT = "report"
+    SUPPORTER_OBSERVATION = "supporter_observation"
+    SPECULATION = "speculation"
+    INFERENCE = "inference"
+
+
+class EvidenceRelationshipType:
+    SUPPORTS = "supports"
+    CONTRADICTS = "contradicts"
+    SUPERSEDES = "supersedes"
+
+
+class SourceClusterMembershipType:
+    ORIGINAL = "original"
+    INDEPENDENT = "independent"
+    DERIVATIVE = "derivative"
+    UNCLEAR = "unclear"
+
+
 class Player(Base):
     """A durable reference to an official FPL player."""
 
@@ -148,6 +178,9 @@ class Player(Base):
     monitoring_triggers: Mapped[list["MonitoringTrigger"]] = relationship(back_populates="player")
     research_situations: Mapped[list["ResearchSituation"]] = relationship(
         secondary=situation_players, back_populates="players"
+    )
+    research_evidence: Mapped[list["ResearchEvidence"]] = relationship(
+        secondary=research_evidence_players, back_populates="players"
     )
 
 
@@ -438,6 +471,114 @@ class ResearchResult(Base):
     thread: Mapped[ResearchThread] = relationship(back_populates="results")
     research_link: Mapped[ResearchLink] = relationship(back_populates="results")
     players: Mapped[list[Player]] = relationship(secondary=research_result_players, back_populates="research_results")
+
+
+class ResearchSourceCluster(Base):
+    """One information lineage; it is not a count of pages repeating a claim."""
+
+    __tablename__ = "research_source_clusters"
+    __table_args__ = (Index("ix_research_source_clusters_thread_situation", "research_thread_id", "research_situation_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    research_thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="RESTRICT"), nullable=False, index=True)
+    research_situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="RESTRICT"), nullable=True, index=True)
+    narrative: Mapped[str] = mapped_column(Text, nullable=False)
+    likely_original_research_link_id: Mapped[str | None] = mapped_column(ForeignKey("research_links.id", ondelete="RESTRICT"), nullable=True, index=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    memberships: Mapped[list["ResearchSourceClusterMembership"]] = relationship(back_populates="source_cluster", order_by="ResearchSourceClusterMembership.created_at")
+
+
+class ResearchSourceClusterMembership(Base):
+    __tablename__ = "research_source_cluster_memberships"
+    __table_args__ = (
+        UniqueConstraint("source_cluster_id", "research_link_id", name="uq_source_cluster_memberships_cluster_link"),
+        CheckConstraint("lineage_type IN ('original', 'independent', 'derivative', 'unclear')", name="ck_source_cluster_memberships_lineage_type"),
+        Index("ix_source_cluster_memberships_link_id", "research_link_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    source_cluster_id: Mapped[str] = mapped_column(ForeignKey("research_source_clusters.id", ondelete="CASCADE"), nullable=False, index=True)
+    research_link_id: Mapped[str] = mapped_column(ForeignKey("research_links.id", ondelete="RESTRICT"), nullable=False)
+    lineage_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    source_cluster: Mapped[ResearchSourceCluster] = relationship(back_populates="memberships")
+    research_link: Mapped[ResearchLink] = relationship()
+
+
+class ResearchEvidence(Base):
+    """One materially coherent claim. Similar text is deliberately not deduplicated."""
+
+    __tablename__ = "research_evidence"
+    __table_args__ = (
+        CheckConstraint("evidence_type IN ('fact', 'statistic', 'report', 'supporter_observation', 'speculation', 'inference')", name="ck_research_evidence_evidence_type"),
+        CheckConstraint("reliability IN ('high', 'medium', 'low')", name="ck_research_evidence_reliability"),
+        CheckConstraint("relevance IN ('high', 'medium', 'low')", name="ck_research_evidence_relevance"),
+        Index("ix_research_evidence_thread_situation", "research_thread_id", "research_situation_id"),
+        Index("ix_research_evidence_source_cluster_id", "source_cluster_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    research_thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="RESTRICT"), nullable=False, index=True)
+    research_situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="RESTRICT"), nullable=True, index=True)
+    claim: Mapped[str] = mapped_column(Text, nullable=False)
+    claim_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    evidence_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    research_link_id: Mapped[str | None] = mapped_column(ForeignKey("research_links.id", ondelete="RESTRICT"), nullable=True, index=True)
+    research_result_id: Mapped[str | None] = mapped_column(ForeignKey("research_results.id", ondelete="RESTRICT"), nullable=True, index=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    season: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    reliability: Mapped[str] = mapped_column(String(16), nullable=False)
+    relevance: Mapped[str] = mapped_column(String(16), nullable=False)
+    is_volatile: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", index=True)
+    source_cluster_id: Mapped[str | None] = mapped_column(ForeignKey("research_source_clusters.id", ondelete="RESTRICT"), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    players: Mapped[list[Player]] = relationship(secondary=research_evidence_players, back_populates="research_evidence")
+    research_link: Mapped[ResearchLink | None] = relationship(foreign_keys=[research_link_id])
+    research_result: Mapped[ResearchResult | None] = relationship(foreign_keys=[research_result_id])
+    source_cluster: Mapped[ResearchSourceCluster | None] = relationship(foreign_keys=[source_cluster_id])
+    hypothesis_relations: Mapped[list["EvidenceHypothesisRelation"]] = relationship(back_populates="evidence")
+
+
+class EvidenceHypothesisRelation(Base):
+    __tablename__ = "evidence_hypothesis_relations"
+    __table_args__ = (
+        UniqueConstraint("evidence_id", "hypothesis_id", "relationship_type", name="uq_evidence_hypothesis_relations_identity"),
+        CheckConstraint("relationship_type IN ('supports', 'contradicts')", name="ck_evidence_hypothesis_relations_type"),
+        Index("ix_evidence_hypothesis_relations_hypothesis_id", "hypothesis_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("research_evidence.id", ondelete="CASCADE"), nullable=False, index=True)
+    hypothesis_id: Mapped[str] = mapped_column(ForeignKey("situation_hypotheses.id", ondelete="RESTRICT"), nullable=False)
+    relationship_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    evidence: Mapped[ResearchEvidence] = relationship(back_populates="hypothesis_relations")
+    hypothesis: Mapped[SituationHypothesis] = relationship()
+
+
+class EvidenceRelation(Base):
+    __tablename__ = "evidence_relations"
+    __table_args__ = (
+        UniqueConstraint("from_evidence_id", "to_evidence_id", "relation_type", name="uq_evidence_relations_identity"),
+        CheckConstraint("from_evidence_id <> to_evidence_id", name="ck_evidence_relations_not_self"),
+        CheckConstraint("relation_type IN ('supports', 'contradicts', 'supersedes')", name="ck_evidence_relations_type"),
+        Index("ix_evidence_relations_to_evidence_id", "to_evidence_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    from_evidence_id: Mapped[str] = mapped_column(ForeignKey("research_evidence.id", ondelete="RESTRICT"), nullable=False, index=True)
+    to_evidence_id: Mapped[str] = mapped_column(ForeignKey("research_evidence.id", ondelete="RESTRICT"), nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    from_evidence: Mapped[ResearchEvidence] = relationship(foreign_keys=[from_evidence_id])
+    to_evidence: Mapped[ResearchEvidence] = relationship(foreign_keys=[to_evidence_id])
 
 
 class ResearchRun(Base):

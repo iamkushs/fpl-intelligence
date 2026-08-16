@@ -15,6 +15,8 @@ from fpl_intelligence.models import (
     ResearchSituation,
     ResearchThread,
     SituationHypothesis,
+    ResearchEvidence,
+    ResearchSourceCluster,
 )
 from fpl_intelligence.repositories.research_documents import ResearchDocumentRepository
 from fpl_intelligence.repositories.research_jobs import ResearchJobRepository
@@ -28,6 +30,7 @@ from fpl_intelligence.research.service import ResearchRunService
 from fpl_intelligence.research.situations import ResearchSituationService
 from fpl_intelligence.research.two_stage import PlayerResolver
 from fpl_intelligence.repositories.research_persistence import ResearchPersistenceRepository
+from fpl_intelligence.research.evidence import ResearchEvidenceService
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -337,6 +340,233 @@ def get_session(request: Request):
         yield session
     finally:
         session.close()
+
+
+class EvidenceCreateRequest(BaseModel):
+    research_thread_id: str = Field(min_length=1)
+    claim: str = Field(min_length=1)
+    claim_type: str = Field(min_length=1)
+    evidence_type: str = Field(min_length=1)
+    reliability: str = Field(min_length=1)
+    relevance: str = Field(min_length=1)
+    research_situation_id: str | None = None
+    research_link_id: str | None = None
+    research_result_id: str | None = None
+    source_cluster_id: str | None = None
+    player_ids: list[int] = Field(default_factory=list)
+    published_at: datetime | None = None
+    observed_at: datetime | None = None
+    retrieved_at: datetime | None = None
+    season: str | None = None
+    is_volatile: bool | None = None
+    notes: str | None = None
+
+
+class EvidencePlayersRequest(BaseModel):
+    player_ids: list[int] = Field(min_length=1)
+
+
+class EvidenceHypothesisRelationRequest(BaseModel):
+    hypothesis_id: str = Field(min_length=1)
+    relationship_type: str = Field(min_length=1)
+    rationale: str | None = None
+
+
+class EvidenceRelationRequest(BaseModel):
+    to_evidence_id: str = Field(min_length=1)
+    relation_type: str = Field(min_length=1)
+    rationale: str | None = None
+
+
+class SourceClusterCreateRequest(BaseModel):
+    research_thread_id: str = Field(min_length=1)
+    narrative: str = Field(min_length=1)
+    research_situation_id: str | None = None
+    likely_original_research_link_id: str | None = None
+    notes: str | None = None
+
+
+class SourceClusterLinkRequest(BaseModel):
+    research_link_id: str = Field(min_length=1)
+    lineage_type: str = Field(min_length=1)
+    notes: str | None = None
+
+
+class EvidenceResponse(BaseModel):
+    id: str
+    research_thread_id: str
+    research_situation_id: str | None
+    claim: str
+    claim_type: str
+    evidence_type: str
+    reliability: str
+    relevance: str
+    is_volatile: bool
+    published_at: datetime | None
+    observed_at: datetime | None
+    retrieved_at: datetime | None
+    season: str | None
+    notes: str | None
+    player_ids: list[int]
+    source_provenance: dict | None
+    source_cluster: dict | None
+    hypothesis_relationships: list[dict]
+    evidence_relationships: list[dict]
+
+
+class SourceClusterResponse(BaseModel):
+    id: str
+    research_thread_id: str
+    research_situation_id: str | None
+    narrative: str
+    likely_original_research_link_id: str | None
+    notes: str | None
+    independent_confirmation_count: int
+    memberships: list[dict]
+
+
+def _evidence_response(evidence: ResearchEvidence, service: ResearchEvidenceService, session: Session, *, relations=None) -> EvidenceResponse:
+    provenance = None
+    if evidence.research_link:
+        provenance = {"research_link_id": evidence.research_link.id, "url": evidence.research_link.original_url,
+                      "title": evidence.research_link.title, "source": evidence.research_link.domain,
+                      "retrieval_status": evidence.research_link.status}
+    if evidence.research_result:
+        provenance = {**(provenance or {}), "research_result_id": evidence.research_result.id,
+                      "result_retrieved_at": evidence.research_result.researched_at}
+    cluster = None
+    if evidence.source_cluster:
+        cluster = {"id": evidence.source_cluster.id, "narrative": evidence.source_cluster.narrative}
+    return EvidenceResponse(
+        id=evidence.id, research_thread_id=evidence.research_thread_id, research_situation_id=evidence.research_situation_id,
+        claim=evidence.claim, claim_type=evidence.claim_type, evidence_type=evidence.evidence_type,
+        reliability=evidence.reliability, relevance=evidence.relevance, is_volatile=evidence.is_volatile,
+        published_at=evidence.published_at, observed_at=evidence.observed_at, retrieved_at=evidence.retrieved_at,
+        season=evidence.season, notes=evidence.notes, player_ids=sorted(player.id for player in evidence.players),
+        source_provenance=provenance, source_cluster=cluster,
+        hypothesis_relationships=[{"hypothesis_id": item.hypothesis_id, "relationship_type": item.relationship_type, "rationale": item.rationale}
+                                  for item in evidence.hypothesis_relations],
+        evidence_relationships=[{"from_evidence_id": item.from_evidence_id, "to_evidence_id": item.to_evidence_id,
+                                 "relation_type": item.relation_type, "rationale": item.rationale}
+                                for item in (service.relations_for(session, evidence.id) if relations is None else relations)],
+    )
+
+
+def _evidence_responses(evidence: list[ResearchEvidence], service: ResearchEvidenceService, session: Session) -> list[EvidenceResponse]:
+    relations = service.relations_for_many(session, [item.id for item in evidence])
+    return [_evidence_response(item, service, session, relations=relations[item.id]) for item in evidence]
+
+
+def _cluster_response(cluster: ResearchSourceCluster, service: ResearchEvidenceService) -> SourceClusterResponse:
+    return SourceClusterResponse(
+        id=cluster.id, research_thread_id=cluster.research_thread_id, research_situation_id=cluster.research_situation_id,
+        narrative=cluster.narrative, likely_original_research_link_id=cluster.likely_original_research_link_id, notes=cluster.notes,
+        independent_confirmation_count=service.independent_confirmation_count(cluster),
+        memberships=[{"research_link_id": item.research_link_id, "lineage_type": item.lineage_type, "notes": item.notes,
+                      "url": item.research_link.original_url, "title": item.research_link.title, "source": item.research_link.domain}
+                     for item in cluster.memberships],
+    )
+
+
+def _evidence_error(exc: Exception):
+    if isinstance(exc, LookupError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    raise exc
+
+
+@router.post("/evidence", response_model=EvidenceResponse, status_code=status.HTTP_201_CREATED)
+def create_evidence(payload: EvidenceCreateRequest, session: Session = Depends(get_session)):
+    service = ResearchEvidenceService()
+    try:
+        evidence = service.create_evidence(session, **payload.model_dump())
+    except (LookupError, ValueError) as exc:
+        session.rollback()
+        _evidence_error(exc)
+    return _evidence_response(evidence, service, session)
+
+
+@router.get("/evidence/{evidence_id}", response_model=EvidenceResponse)
+def get_evidence(evidence_id: str, session: Session = Depends(get_session)):
+    service = ResearchEvidenceService()
+    evidence = service.get_evidence(session, evidence_id)
+    if evidence is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ResearchEvidence not found")
+    return _evidence_response(evidence, service, session)
+
+
+@router.get("/threads/{thread_id}/evidence", response_model=list[EvidenceResponse])
+def list_thread_evidence(thread_id: str, session: Session = Depends(get_session)):
+    service = ResearchEvidenceService()
+    if service.repository.get_thread(session, thread_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ResearchThread not found")
+    return _evidence_responses(service.list_evidence(session, thread_id=thread_id), service, session)
+
+
+@router.get("/situations/{situation_id}/evidence", response_model=list[EvidenceResponse])
+def list_situation_evidence(situation_id: str, session: Session = Depends(get_session)):
+    service = ResearchEvidenceService()
+    if service.repository.get_situation(session, situation_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ResearchSituation not found")
+    return _evidence_responses(service.list_evidence(session, situation_id=situation_id), service, session)
+
+
+@router.post("/evidence/{evidence_id}/players", response_model=EvidenceResponse)
+def attach_evidence_players(evidence_id: str, payload: EvidencePlayersRequest, session: Session = Depends(get_session)):
+    service = ResearchEvidenceService()
+    try:
+        evidence = service.attach_players(session, evidence_id, payload.player_ids)
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _evidence_error(exc)
+    return _evidence_response(evidence, service, session)
+
+
+@router.post("/evidence/{evidence_id}/hypothesis-relations", response_model=dict, status_code=status.HTTP_201_CREATED)
+def add_evidence_hypothesis_relation(evidence_id: str, payload: EvidenceHypothesisRelationRequest, session: Session = Depends(get_session)):
+    try:
+        relation = ResearchEvidenceService().add_hypothesis_relation(session, evidence_id=evidence_id, **payload.model_dump())
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _evidence_error(exc)
+    return {"id": relation.id, "evidence_id": relation.evidence_id, "hypothesis_id": relation.hypothesis_id, "relationship_type": relation.relationship_type, "rationale": relation.rationale}
+
+
+@router.post("/evidence/{evidence_id}/relations", response_model=dict, status_code=status.HTTP_201_CREATED)
+def add_evidence_relation(evidence_id: str, payload: EvidenceRelationRequest, session: Session = Depends(get_session)):
+    try:
+        relation = ResearchEvidenceService().add_evidence_relation(session, from_evidence_id=evidence_id, **payload.model_dump())
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _evidence_error(exc)
+    return {"id": relation.id, "from_evidence_id": relation.from_evidence_id, "to_evidence_id": relation.to_evidence_id, "relation_type": relation.relation_type, "rationale": relation.rationale}
+
+
+@router.post("/source-clusters", response_model=SourceClusterResponse, status_code=status.HTTP_201_CREATED)
+def create_source_cluster(payload: SourceClusterCreateRequest, session: Session = Depends(get_session)):
+    service = ResearchEvidenceService()
+    try:
+        cluster = service.create_cluster(session, **payload.model_dump())
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _evidence_error(exc)
+    return _cluster_response(cluster, service)
+
+
+@router.get("/source-clusters/{cluster_id}", response_model=SourceClusterResponse)
+def get_source_cluster(cluster_id: str, session: Session = Depends(get_session)):
+    service = ResearchEvidenceService()
+    cluster = service.get_cluster(session, cluster_id)
+    if cluster is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ResearchSourceCluster not found")
+    return _cluster_response(cluster, service)
+
+
+@router.post("/source-clusters/{cluster_id}/links", response_model=SourceClusterResponse)
+def attach_source_cluster_link(cluster_id: str, payload: SourceClusterLinkRequest, session: Session = Depends(get_session)):
+    service = ResearchEvidenceService()
+    try:
+        cluster = service.attach_cluster_link(session, cluster_id=cluster_id, **payload.model_dump())
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _evidence_error(exc)
+    return _cluster_response(cluster, service)
 
 
 def _player_resolver(request: Request) -> PlayerResolver:
