@@ -9,6 +9,9 @@ from dataclasses import dataclass
 EVAL2_SOURCE_DISCOVERY_PROMPT_VERSION = "eval2_source_discovery_v1"
 EVAL2_PAGE_RESEARCH_PROMPT_VERSION = "eval2_page_research_v1"
 EVAL2_ATOMIC_EXTRACTION_PROMPT_VERSION = "eval2_atomic_evidence_extraction_v1"
+EVAL2_REDDIT_RESEARCH_PROMPT_VERSION = "eval2_reddit_research_v1"
+EVAL2_COUNTER_SEARCH_PROMPT_VERSION = "eval2_counter_search_v1"
+EVAL2_FRESHNESS_PROMPT_VERSION = "eval2_freshness_v1"
 
 EVAL2_DISCOVERY_DIMENSIONS = (
     "availability",
@@ -225,3 +228,71 @@ def atomic_extraction_prompt(
         ]
     )
     return PromptEnvelope(EVAL2_ATOMIC_EXTRACTION_PROMPT_VERSION, prompt, contract)
+
+
+def reddit_research_prompt(*, player_payload: dict, research_cutoff: str, situation_payload: dict | None = None) -> PromptEnvelope:
+    contract = {
+        "findings": [
+            {
+                "claim": "FPL-relevant qualitative claim",
+                "observation_type": "direct_observation|interpretation|relayed_report|rumour|speculation",
+                "disagreement": "known disagreement or null",
+            }
+        ]
+    }
+    prompt = "\n".join(
+        [
+            f"Prompt version: {EVAL2_REDDIT_RESEARCH_PROMPT_VERSION}",
+            "Use ordinary Reddit/web sources only; no Reddit API.",
+            "Research qualitative FPL information only and distinguish direct_observation, interpretation, relayed_report, rumour, and speculation.",
+            "Preserve disagreement. Never use upvotes as reliability. Do not fabricate permalink, timestamp, or author metadata.",
+            "Focus on starts, minutes, role, position, competition, formation, set pieces, penalties, injury/training observations, and manager tendencies.",
+            "Avoid generic hype, sentiment, memes, and supporter interpretation presented as fact.",
+            f"Research cutoff: {research_cutoff}.",
+            f"Player: {json.dumps(player_payload, sort_keys=True)}",
+            f"Situation: {json.dumps(situation_payload, sort_keys=True) if situation_payload else 'none'}",
+            "Return JSON only matching this contract:",
+            json.dumps(contract, sort_keys=True),
+        ]
+    )
+    return PromptEnvelope(EVAL2_REDDIT_RESEARCH_PROMPT_VERSION, prompt, contract)
+
+
+def counter_search_prompt(*, challenged_claim: str, research_cutoff: str, questions: list[str] | None = None) -> PromptEnvelope:
+    contract = {
+        "challenged_claim": "claim being challenged",
+        "questions": ["questions to test the interpretation"],
+        "queries": ["search queries"],
+    }
+    prompt = "\n".join(
+        [
+            f"Prompt version: {EVAL2_COUNTER_SEARCH_PROMPT_VERSION}",
+            "Challenge the current evidence interpretation; do NOT argue against buying the player.",
+            "Look for credible evidence that contradicts, qualifies, supersedes, narrows, or weakens the interpretation.",
+            "Do not make a transfer recommendation.",
+            f"Research cutoff: {research_cutoff}.",
+            f"Challenged claim: {challenged_claim}",
+            f"Questions: {json.dumps(questions or [])}",
+            "Return JSON only matching this contract:",
+            json.dumps(contract, sort_keys=True),
+        ]
+    )
+    return PromptEnvelope(EVAL2_COUNTER_SEARCH_PROMPT_VERSION, prompt, contract)
+
+
+def freshness_prompt(*, evidence_payload: dict, research_cutoff: str) -> PromptEnvelope:
+    contract = {"outcome": "still_current|changed|unresolved|superseded", "rationale": "brief evidence-based rationale"}
+    prompt = "\n".join(
+        [
+            f"Prompt version: {EVAL2_FRESHNESS_PROMPT_VERSION}",
+            "Is this claim still current as of the research cutoff?",
+            "Allowed outcomes only: still_current, changed, unresolved, superseded.",
+            "Prefer newer primary/direct evidence, but do not assume newer low-quality information beats older primary evidence.",
+            "Do not fabricate current status.",
+            f"Research cutoff: {research_cutoff}.",
+            f"Atomic evidence: {json.dumps(evidence_payload, sort_keys=True, default=str)}",
+            "Return JSON only matching this contract:",
+            json.dumps(contract, sort_keys=True),
+        ]
+    )
+    return PromptEnvelope(EVAL2_FRESHNESS_PROMPT_VERSION, prompt, contract)

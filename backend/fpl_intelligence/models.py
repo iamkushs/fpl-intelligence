@@ -102,6 +102,20 @@ research_evidence_players = Table(
     Index("ix_research_evidence_players_player_id", "player_id"),
 )
 
+research_quality_run_links = Table(
+    "research_quality_run_links",
+    Base.metadata,
+    Column("quality_run_id", String(36), ForeignKey("research_quality_runs.id", ondelete="CASCADE"), primary_key=True),
+    Column("research_link_id", String(36), ForeignKey("research_links.id", ondelete="CASCADE"), primary_key=True),
+)
+
+research_quality_run_evidence = Table(
+    "research_quality_run_evidence",
+    Base.metadata,
+    Column("quality_run_id", String(36), ForeignKey("research_quality_runs.id", ondelete="CASCADE"), primary_key=True),
+    Column("research_evidence_id", String(36), ForeignKey("research_evidence.id", ondelete="CASCADE"), primary_key=True),
+)
+
 watchlist_suggestion_results = Table(
     "watchlist_suggestion_results",
     Base.metadata,
@@ -180,6 +194,20 @@ class ResearchSourceCandidateStatus:
 
 class ResearchPageResearchAttemptStatus:
     RESEARCHED = "researched"
+    FAILED = "failed"
+
+
+class ResearchQualityStage:
+    REDDIT = "reddit"
+    COUNTER_SEARCH = "counter_search"
+    FRESHNESS = "freshness"
+
+
+class ResearchQualityStatus:
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    PARTIAL = "partial"
     FAILED = "failed"
 
 
@@ -698,6 +726,45 @@ class ResearchEvidence(Base):
     research_result: Mapped[ResearchResult | None] = relationship(foreign_keys=[research_result_id])
     source_cluster: Mapped[ResearchSourceCluster | None] = relationship(foreign_keys=[source_cluster_id])
     hypothesis_relations: Mapped[list["EvidenceHypothesisRelation"]] = relationship(back_populates="evidence")
+
+
+class ResearchQualityRun(Base):
+    """Durable quality-control pass over research evidence or source material."""
+
+    __tablename__ = "research_quality_runs"
+    __table_args__ = (
+        Index("ix_research_quality_runs_thread_id", "thread_id"),
+        Index("ix_research_quality_runs_player_id", "player_id"),
+        Index("ix_research_quality_runs_stage", "stage"),
+        Index("ix_research_quality_runs_status", "status"),
+        Index("ix_research_quality_runs_research_cutoff", "research_cutoff"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="CASCADE"), nullable=False)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="SET NULL"), nullable=True)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_evidence_id: Mapped[str | None] = mapped_column(ForeignKey("research_evidence.id", ondelete="SET NULL"), nullable=True)
+    superseding_evidence_id: Mapped[str | None] = mapped_column(ForeignKey("research_evidence.id", ondelete="SET NULL"), nullable=True)
+    research_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    challenged_claim: Mapped[str | None] = mapped_column(Text, nullable=True)
+    questions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    thread: Mapped[ResearchThread] = relationship()
+    player: Mapped[Player] = relationship()
+    situation: Mapped[ResearchSituation | None] = relationship()
+    target_evidence: Mapped[ResearchEvidence | None] = relationship(foreign_keys=[target_evidence_id])
+    superseding_evidence: Mapped[ResearchEvidence | None] = relationship(foreign_keys=[superseding_evidence_id])
+    links: Mapped[list[ResearchLink]] = relationship(secondary=research_quality_run_links)
+    evidence: Mapped[list[ResearchEvidence]] = relationship(secondary=research_quality_run_evidence)
 
 
 class EvidenceHypothesisRelation(Base):
