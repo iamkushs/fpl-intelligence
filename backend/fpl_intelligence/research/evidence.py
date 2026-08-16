@@ -47,7 +47,9 @@ class ResearchEvidenceService:
                         research_link_id: str | None = None, research_result_id: str | None = None,
                         source_cluster_id: str | None = None, player_ids: list[int] | None = None,
                         published_at=None, observed_at=None, retrieved_at=None, season: str | None = None,
-                        is_volatile: bool | None = None, notes: str | None = None):
+                        is_volatile: bool | None = None, notes: str | None = None,
+                        extraction_prompt_version: str | None = None, extraction_fingerprint: str | None = None,
+                        commit: bool = True):
         self._text(claim, "Evidence claim is required")
         self._choice(claim_type, CLAIM_TYPES, "Unknown claim type")
         self._choice(evidence_type, EVIDENCE_TYPES, "Unknown evidence type")
@@ -70,10 +72,14 @@ class ResearchEvidenceService:
             claim=claim.strip(), claim_type=claim_type, evidence_type=evidence_type, research_link_id=link.id if link else None,
             research_result_id=result.id if result else None, source_cluster_id=cluster.id if cluster else None, published_at=published_at,
             observed_at=observed_at, retrieved_at=retrieved_at, season=season, reliability=reliability, relevance=relevance,
-            is_volatile=claim_type in VOLATILE_CLAIM_TYPES if is_volatile is None else is_volatile, notes=notes)
+            is_volatile=claim_type in VOLATILE_CLAIM_TYPES if is_volatile is None else is_volatile, notes=notes,
+            extraction_prompt_version=extraction_prompt_version, extraction_fingerprint=extraction_fingerprint)
         self._attach_players(session, evidence, player_ids or [])
-        session.commit()
-        return self.get_evidence(session, evidence.id)
+        if commit:
+            session.commit()
+            return self.get_evidence(session, evidence.id)
+        session.flush()
+        return evidence
 
     def get_evidence(self, session: Session, evidence_id: str):
         return self.repository.get_evidence(session, evidence_id)
@@ -87,7 +93,7 @@ class ResearchEvidenceService:
         session.commit()
         return self.get_evidence(session, evidence_id)
 
-    def add_hypothesis_relation(self, session: Session, *, evidence_id: str, hypothesis_id: str, relationship_type: str, rationale: str | None = None):
+    def add_hypothesis_relation(self, session: Session, *, evidence_id: str, hypothesis_id: str, relationship_type: str, rationale: str | None = None, commit: bool = True):
         evidence = self._require(self.get_evidence(session, evidence_id), "ResearchEvidence")
         hypothesis = self._require(self.repository.get_hypothesis(session, hypothesis_id), "SituationHypothesis")
         self._choice(relationship_type, HYPOTHESIS_RELATION_TYPES, "Hypothesis relationship must support or contradict")
@@ -97,10 +103,11 @@ class ResearchEvidenceService:
         if existing:
             return existing
         relation = self.repository.add_hypothesis_relation(session, evidence_id=evidence.id, hypothesis_id=hypothesis.id, relationship_type=relationship_type, rationale=rationale)
-        session.commit()
+        if commit:
+            session.commit()
         return relation
 
-    def add_evidence_relation(self, session: Session, *, from_evidence_id: str, to_evidence_id: str, relation_type: str, rationale: str | None = None):
+    def add_evidence_relation(self, session: Session, *, from_evidence_id: str, to_evidence_id: str, relation_type: str, rationale: str | None = None, commit: bool = True):
         if from_evidence_id == to_evidence_id:
             raise ValueError("Evidence cannot relate to itself")
         self._require(self.get_evidence(session, from_evidence_id), "ResearchEvidence")
@@ -111,7 +118,8 @@ class ResearchEvidenceService:
         if existing:
             return existing
         relation = self.repository.add_evidence_relation(session, from_evidence_id=from_evidence_id, to_evidence_id=to_evidence_id, relation_type=relation_type, rationale=rationale)
-        session.commit()
+        if commit:
+            session.commit()
         return relation
 
     def relations_for(self, session: Session, evidence_id: str):

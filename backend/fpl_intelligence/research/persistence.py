@@ -62,10 +62,43 @@ class ResearchPersistenceService:
         session.commit()
         return link
 
-    def persist_result(self, session: Session, *, link, summary: str, findings: str, evidence: str, player_ids: list[int], uncertainty: str | None = None, researched_at: datetime | None = None):
-        result = self.repository.add_result(session, research_thread_id=link.research_thread_id, research_link_id=link.id, summary=summary, findings=findings, evidence=evidence, uncertainty=uncertainty, researched_at=researched_at or datetime.now(timezone.utc))
+    def get_link_by_canonical_url(self, session: Session, *, thread_id: str, canonical_url: str):
+        return self.repository.get_link_by_canonical_url(session, thread_id=thread_id, canonical_url=canonical_url)
+
+    def persist_result(self, session: Session, *, link, summary: str, findings: str, evidence: str, player_ids: list[int],
+                       uncertainty: str | None = None, researched_at: datetime | None = None,
+                       prompt_version: str | None = None, research_cutoff: datetime | None = None,
+                       source_metadata: dict | None = None):
+        if prompt_version is not None and research_cutoff is not None:
+            existing = self.repository.get_result_by_link_prompt_cutoff(
+                session,
+                research_link_id=link.id,
+                prompt_version=prompt_version,
+                research_cutoff=research_cutoff,
+            )
+            if existing is not None:
+                return existing
+        try:
+            result = self.repository.add_result(session, research_thread_id=link.research_thread_id, research_link_id=link.id,
+                                                summary=summary, findings=findings, evidence=evidence, uncertainty=uncertainty,
+                                                prompt_version=prompt_version, research_cutoff=research_cutoff,
+                                                source_metadata=source_metadata, researched_at=researched_at or datetime.now(timezone.utc))
+        except IntegrityError:
+            session.rollback()
+            if prompt_version is None or research_cutoff is None:
+                raise
+            result = self.repository.get_result_by_link_prompt_cutoff(
+                session,
+                research_link_id=link.id,
+                prompt_version=prompt_version,
+                research_cutoff=research_cutoff,
+            )
+            if result is None:
+                raise
+            return result
         result.players.extend(self.repository.get_or_create_player(session, player_id) for player_id in dict.fromkeys(player_ids))
         link.status = ResearchLinkStatus.RESEARCHED
+        link.failure_reason = None
         session.commit()
         session.refresh(result)
         return result

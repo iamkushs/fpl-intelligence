@@ -29,6 +29,7 @@ from fpl_intelligence.research.execution import (
 from fpl_intelligence.research.service import ResearchRunService
 from fpl_intelligence.research.situations import ResearchSituationService
 from fpl_intelligence.research.two_stage import PlayerResolver
+from fpl_intelligence.research.source_discovery import Eval2SourceDiscoveryService
 from fpl_intelligence.repositories.research_persistence import ResearchPersistenceRepository
 from fpl_intelligence.research.evidence import ResearchEvidenceService
 
@@ -51,6 +52,36 @@ class LinkCollectionRequest(BaseModel):
 class LinkResearchRequest(BaseModel):
     link_ids: list[str] | None = None
     all_collected: bool = False
+
+
+class PlayerDiscoveryRequest(BaseModel):
+    research_cutoff: datetime
+    situation_id: str | None = None
+    trigger_id: str | None = None
+    gameweek_id: int | None = Field(default=None, ge=1)
+    target_gameweek_id: int | None = Field(default=None, ge=1)
+    known_missing_dimensions: list[str] = Field(default_factory=list)
+    durable_context: dict | None = None
+
+
+class ThreadDiscoveryRequest(PlayerDiscoveryRequest):
+    player_id: int
+
+
+class LinkResearchEval2Request(BaseModel):
+    research_cutoff: datetime
+    target_dimensions: list[str] = Field(default_factory=list)
+    situation_id: str | None = None
+    trigger_id: str | None = None
+    durable_context: dict | None = None
+    retry_failed: bool = False
+
+
+class EvidenceExtractionEval2Request(BaseModel):
+    research_cutoff: datetime
+    situation_id: str | None = None
+    trigger_id: str | None = None
+    durable_context: dict | None = None
 
 
 class SituationCreateRequest(BaseModel):
@@ -574,6 +605,10 @@ def _player_resolver(request: Request) -> PlayerResolver:
     return PlayerResolver(snapshot.players)
 
 
+def _eval2_service(request: Request) -> Eval2SourceDiscoveryService:
+    return request.app.state.eval2_source_discovery_service
+
+
 @router.post("/situations", response_model=ResearchSituationResponse, status_code=status.HTTP_201_CREATED)
 def create_situation(payload: SituationCreateRequest, session: Session = Depends(get_session)):
     try:
@@ -683,6 +718,120 @@ def attach_situation_thread(
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return {"thread_id": thread.id, "situation_id": thread.situation_id}
+
+
+@router.post("/players/{player_id}/discover")
+def discover_player_sources(
+    player_id: int,
+    payload: PlayerDiscoveryRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    try:
+        return _eval2_service(request).start_player_discovery(
+            session,
+            player_id=player_id,
+            research_cutoff=payload.research_cutoff,
+            situation_id=payload.situation_id,
+            trigger_id=payload.trigger_id,
+            gameweek_id=payload.gameweek_id,
+            target_gameweek_id=payload.target_gameweek_id,
+            known_missing_dimensions=payload.known_missing_dimensions,
+            durable_context=payload.durable_context,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.post("/threads/{thread_id}/discover")
+def discover_thread_sources(
+    thread_id: str,
+    payload: ThreadDiscoveryRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    try:
+        return _eval2_service(request).discover_for_thread(
+            session,
+            thread_id=thread_id,
+            player_id=payload.player_id,
+            research_cutoff=payload.research_cutoff,
+            situation_id=payload.situation_id,
+            trigger_id=payload.trigger_id,
+            gameweek_id=payload.gameweek_id,
+            target_gameweek_id=payload.target_gameweek_id,
+            known_missing_dimensions=payload.known_missing_dimensions,
+            durable_context=payload.durable_context,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.get("/threads/{thread_id}/discovery")
+def get_thread_discovery(thread_id: str, request: Request, session: Session = Depends(get_session)):
+    try:
+        return _eval2_service(request).thread_execution_state(session, thread_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/threads/{thread_id}/execution")
+def get_thread_execution(thread_id: str, request: Request, session: Session = Depends(get_session)):
+    try:
+        return _eval2_service(request).thread_execution_state(session, thread_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/links/{link_id}/research")
+def research_collected_link(
+    link_id: str,
+    payload: LinkResearchEval2Request,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    try:
+        return _eval2_service(request).research_link(
+            session,
+            link_id=link_id,
+            player_resolver=_player_resolver(request),
+            research_cutoff=payload.research_cutoff,
+            target_dimensions=payload.target_dimensions,
+            situation_id=payload.situation_id,
+            trigger_id=payload.trigger_id,
+            durable_context=payload.durable_context,
+            retry_failed=payload.retry_failed,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.post("/results/{result_id}/extract-evidence")
+def extract_result_evidence(
+    result_id: str,
+    payload: EvidenceExtractionEval2Request,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    try:
+        return _eval2_service(request).extract_atomic_evidence(
+            session,
+            result_id=result_id,
+            research_cutoff=payload.research_cutoff,
+            situation_id=payload.situation_id,
+            trigger_id=payload.trigger_id,
+            durable_context=payload.durable_context,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
 @router.post("/threads/{thread_id}/collect")
