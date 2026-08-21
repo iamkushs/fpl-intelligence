@@ -5,6 +5,7 @@ import logging
 from fastapi import FastAPI
 
 from fpl_intelligence.api.fpl import router as fpl_router
+from fpl_intelligence.api.pair_view import router as pair_view_router
 from fpl_intelligence.api.research import router as research_router
 from fpl_intelligence.api.watchlist import router as watchlist_router
 from fpl_intelligence.api.triggers import router as triggers_router
@@ -12,6 +13,7 @@ from fpl_intelligence.codex.service import CodexService
 from fpl_intelligence.config import Settings, get_settings
 from fpl_intelligence.db.session import Database
 from fpl_intelligence.integrations.fpl.adapter import OfficialFPLAdapter
+from fpl_intelligence.integrations.fpl.managers import OfficialFPLManagerProvider
 from fpl_intelligence.integrations.fpl.snapshot import FPLSnapshotService
 from fpl_intelligence.research.two_stage import (
     CodexResearchExtractor,
@@ -45,6 +47,7 @@ def create_app(
     codex_service: CodexService | None = None,
     fpl_adapter: OfficialFPLAdapter | None = None,
     fpl_snapshot_service: FPLSnapshotService | None = None,
+    fpl_manager_provider=None,
     two_stage_research_service: TwoStageResearchService | None = None,
     eval2_source_discovery_service: Eval2SourceDiscoveryService | None = None,
     research_quality_service: ResearchQualityService | None = None,
@@ -66,6 +69,7 @@ def create_app(
         app.state.fpl_adapter,
         season_id=settings.official_fpl_season_id,
     )
+    app.state.fpl_manager_provider = fpl_manager_provider or OfficialFPLManagerProvider(app.state.fpl_adapter)
     app.state.two_stage_research_service = two_stage_research_service or TwoStageResearchService(
         search_provider=CodexSearchProvider(app.state.codex_service),
         retriever=ScraplingPageRetriever(),
@@ -93,6 +97,7 @@ def create_app(
     app.state.discovery_service = DiscoveryService(CodexDiscoveryAnalyzer(app.state.codex_service))
     app.include_router(research_router)
     app.include_router(fpl_router)
+    app.include_router(pair_view_router)
     app.include_router(watchlist_router)
     app.include_router(triggers_router)
 
