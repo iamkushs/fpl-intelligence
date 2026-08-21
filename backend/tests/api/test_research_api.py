@@ -8,8 +8,17 @@ from fpl_intelligence.codex.service import CodexService
 from fpl_intelligence.config import Settings
 from fpl_intelligence.db.base import Base
 from fpl_intelligence.db.session import Database
-from fpl_intelligence.models import Player, ResearchThreadType
+from datetime import datetime, timezone
+
+from fpl_intelligence.models import Player, ResearchEvidenceType, ResearchThreadType
 from fpl_intelligence.research.persistence import ResearchPersistenceService
+from fpl_intelligence.research.source_discovery import (
+    AtomicEvidencePayload,
+    DiscoveryOutput,
+    Eval2SourceDiscoveryService,
+    EvidenceExtractionOutput,
+    SourceCandidatePayload,
+)
 from fpl_intelligence.research.two_stage import ResearchExtraction, SearchResult, TwoStageResearchService
 
 
@@ -42,6 +51,47 @@ class StaticRetriever:
 class StaticExtractor:
     def extract(self, **kwargs):
         return ResearchExtraction("Training update", "Saka trained.", "Source page", None, ["Saka"])
+
+
+class StaticEval2Discovery:
+    def discover(self, *, prompt, prompt_version, phase):
+        if phase == "targeted":
+            return DiscoveryOutput()
+        return DiscoveryOutput(candidates=[
+            SourceCandidatePayload(
+                url="https://premierleague.com/saka",
+                source="Premier League",
+                publisher="Premier League",
+                title="Saka team news",
+                target_dimensions=["availability"],
+                usefulness="Primary availability source.",
+                source_category="official_primary",
+                expected_relevance="high",
+                published_at=datetime(2026, 8, 15, 10, tzinfo=timezone.utc),
+                lineage_type="original",
+            )
+        ])
+
+
+class StaticEval2PageResearch:
+    def extract(self, *, prompt, prompt_version, thread, link, page_content):
+        return ResearchExtraction("Training", "Saka trained.", "Manager quote.", None, ["Saka"])
+
+
+class StaticEval2Atomic:
+    def extract(self, *, prompt, prompt_version, result):
+        return EvidenceExtractionOutput(evidence=[
+            AtomicEvidencePayload(
+                claim="Manager said Saka trained.",
+                claim_type="availability",
+                evidence_type=ResearchEvidenceType.REPORT,
+                player_ids=[7],
+                published_at=datetime(2026, 8, 15, 10, tzinfo=timezone.utc),
+                retrieved_at=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+                reliability="high",
+                relevance="high",
+            )
+        ])
 
 
 def _workspace_database_url():
@@ -221,6 +271,52 @@ def test_two_stage_thread_api_collects_lists_researches_and_returns_results():
             assert results.status_code == 200
             assert results.json()[0]["source_url"].startswith("https://www.reddit.com/")
             assert results.json()[0]["player_ids"] == [7]
+    finally:
+        database.engine.dispose()
+        Path(database_url.removeprefix("sqlite:///")).unlink(missing_ok=True)
+
+
+def test_eval2_discovery_research_and_extraction_api_flow():
+    database_url = _workspace_database_url()
+    settings = Settings(database_url=database_url)
+    database = Database(settings)
+    Base.metadata.create_all(database.engine)
+    with database.session_factory() as session:
+        session.add(Player(id=7))
+        session.commit()
+    workflow = Eval2SourceDiscoveryService(
+        discovery_provider=StaticEval2Discovery(),
+        retriever=StaticRetriever(),
+        page_research_provider=StaticEval2PageResearch(),
+        atomic_provider=StaticEval2Atomic(),
+    )
+    app = create_app(
+        settings,
+        database=database,
+        codex_service=CodexService(client=object()),
+        fpl_snapshot_service=StaticSnapshotService(),
+        eval2_source_discovery_service=workflow,
+    )
+    try:
+        with TestClient(app) as test_client:
+            cutoff = "2026-08-15T12:00:00Z"
+            discovered = test_client.post("/research/players/7/discover", json={"research_cutoff": cutoff})
+            assert discovered.status_code == 200, discovered.text
+            thread_id = discovered.json()["research_thread_id"]
+            link_id = discovered.json()["candidates"][0]["research_link_id"]
+
+            state = test_client.get(f"/research/threads/{thread_id}/execution")
+            assert state.status_code == 200
+            assert state.json()["executions"][0]["discovery_prompt_version"] == "eval2_source_discovery_v1"
+
+            researched = test_client.post(f"/research/links/{link_id}/research", json={"research_cutoff": cutoff})
+            assert researched.status_code == 200, researched.text
+            result_id = researched.json()["result_ids"][0]
+
+            extracted = test_client.post(f"/research/results/{result_id}/extract-evidence", json={"research_cutoff": cutoff})
+            assert extracted.status_code == 200, extracted.text
+            assert extracted.json()["created"] == 1
+            assert extracted.json()["extraction_prompt_version"] == "eval2_atomic_evidence_extraction_v1"
     finally:
         database.engine.dispose()
         Path(database_url.removeprefix("sqlite:///")).unlink(missing_ok=True)

@@ -16,6 +16,7 @@ from fpl_intelligence.models import (
     ResearchThread,
     SituationHypothesis,
     ResearchEvidence,
+    ResearchQualityStage,
     ResearchSourceCluster,
 )
 from fpl_intelligence.repositories.research_documents import ResearchDocumentRepository
@@ -29,6 +30,9 @@ from fpl_intelligence.research.execution import (
 from fpl_intelligence.research.service import ResearchRunService
 from fpl_intelligence.research.situations import ResearchSituationService
 from fpl_intelligence.research.two_stage import PlayerResolver
+from fpl_intelligence.research.source_discovery import Eval2SourceDiscoveryService
+from fpl_intelligence.research.quality import ResearchQualityService, quality_run_state
+from fpl_intelligence.research.quality_execution import Eval2QualityExecutionService
 from fpl_intelligence.repositories.research_persistence import ResearchPersistenceRepository
 from fpl_intelligence.research.evidence import ResearchEvidenceService
 
@@ -51,6 +55,91 @@ class LinkCollectionRequest(BaseModel):
 class LinkResearchRequest(BaseModel):
     link_ids: list[str] | None = None
     all_collected: bool = False
+
+
+class PlayerDiscoveryRequest(BaseModel):
+    research_cutoff: datetime
+    situation_id: str | None = None
+    trigger_id: str | None = None
+    gameweek_id: int | None = Field(default=None, ge=1)
+    target_gameweek_id: int | None = Field(default=None, ge=1)
+    known_missing_dimensions: list[str] = Field(default_factory=list)
+    durable_context: dict | None = None
+
+
+class ThreadDiscoveryRequest(PlayerDiscoveryRequest):
+    player_id: int
+
+
+class LinkResearchEval2Request(BaseModel):
+    research_cutoff: datetime
+    target_dimensions: list[str] = Field(default_factory=list)
+    situation_id: str | None = None
+    trigger_id: str | None = None
+    durable_context: dict | None = None
+    retry_failed: bool = False
+
+
+class EvidenceExtractionEval2Request(BaseModel):
+    research_cutoff: datetime
+    situation_id: str | None = None
+    trigger_id: str | None = None
+    durable_context: dict | None = None
+
+
+class QualityRedditStartRequest(BaseModel):
+    player_id: int
+    situation_id: str | None = None
+    research_cutoff: datetime
+
+
+class QualityCounterSearchStartRequest(BaseModel):
+    player_id: int
+    situation_id: str | None = None
+    research_cutoff: datetime
+    challenged_claim: str = Field(min_length=1)
+    target_evidence_id: str | None = None
+
+
+class QualityFreshnessStartRequest(BaseModel):
+    player_id: int
+    situation_id: str | None = None
+    research_cutoff: datetime
+    target_evidence_id: str = Field(min_length=1)
+
+
+class QualityRunCompleteRequest(BaseModel):
+    link_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    outcome: str | None = None
+    superseding_evidence_id: str | None = None
+    checked_at: datetime | None = None
+    partial: bool = False
+    failure_reason: str | None = None
+    monitoring_condition: dict | None = None
+
+
+class QualityRunResponse(BaseModel):
+    id: str
+    thread_id: str
+    player_id: int
+    situation_id: str | None
+    stage: str
+    status: str
+    target_evidence_id: str | None
+    superseding_evidence_id: str | None
+    research_cutoff: datetime
+    prompt_version: str
+    challenged_claim: str | None
+    questions: list | None
+    outcome: str | None
+    failure_reason: str | None
+    checked_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    link_ids: list[str]
+    evidence_ids: list[str]
 
 
 class SituationCreateRequest(BaseModel):
@@ -574,6 +663,144 @@ def _player_resolver(request: Request) -> PlayerResolver:
     return PlayerResolver(snapshot.players)
 
 
+def _eval2_service(request: Request) -> Eval2SourceDiscoveryService:
+    return request.app.state.eval2_source_discovery_service
+
+
+def _quality_service(request: Request) -> ResearchQualityService:
+    return getattr(request.app.state, "research_quality_service", ResearchQualityService())
+
+
+def _quality_execution_service(request: Request) -> Eval2QualityExecutionService:
+    return request.app.state.eval2_quality_execution_service
+
+
+def _quality_error(exc: Exception):
+    if isinstance(exc, LookupError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    raise exc
+
+
+@router.post("/threads/{thread_id}/quality/reddit", response_model=QualityRunResponse, status_code=status.HTTP_201_CREATED)
+def start_reddit_quality_run(thread_id: str, payload: QualityRedditStartRequest, request: Request, session: Session = Depends(get_session)):
+    try:
+        run = _quality_service(request).start_reddit_run(session, thread_id=thread_id, **payload.model_dump())
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _quality_error(exc)
+    return quality_run_state(run)
+
+
+@router.post("/threads/{thread_id}/quality/counter-search", response_model=QualityRunResponse, status_code=status.HTTP_201_CREATED)
+def start_counter_search_quality_run(thread_id: str, payload: QualityCounterSearchStartRequest, request: Request, session: Session = Depends(get_session)):
+    challenged_claim = payload.challenged_claim.strip()
+    if not challenged_claim:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="challenged_claim is required")
+    try:
+        run = _quality_service(request).start_counter_search_run(
+            session,
+            thread_id=thread_id,
+            player_id=payload.player_id,
+            situation_id=payload.situation_id,
+            research_cutoff=payload.research_cutoff,
+            challenged_claim=challenged_claim,
+            target_evidence_id=payload.target_evidence_id,
+        )
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _quality_error(exc)
+    return quality_run_state(run)
+
+
+@router.post("/threads/{thread_id}/quality/freshness", response_model=QualityRunResponse, status_code=status.HTTP_201_CREATED)
+def start_freshness_quality_run(thread_id: str, payload: QualityFreshnessStartRequest, request: Request, session: Session = Depends(get_session)):
+    try:
+        run = _quality_service(request).start_freshness_run(session, thread_id=thread_id, **payload.model_dump())
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _quality_error(exc)
+    return quality_run_state(run)
+
+
+@router.post("/quality-runs/{run_id}/complete", response_model=QualityRunResponse)
+def complete_quality_run(run_id: str, payload: QualityRunCompleteRequest, request: Request, session: Session = Depends(get_session)):
+    service = _quality_service(request)
+    try:
+        run = service.repository.get_run_detail(session, run_id)
+        if run.stage == ResearchQualityStage.REDDIT:
+            updated = service.complete_reddit_run(session, run_id=run_id, link_ids=payload.link_ids, evidence_ids=payload.evidence_ids, partial=payload.partial)
+        elif run.stage == ResearchQualityStage.COUNTER_SEARCH:
+            updated = service.complete_counter_search_run(session, run_id=run_id, outcome=payload.outcome or "", link_ids=payload.link_ids, evidence_ids=payload.evidence_ids, partial=payload.partial)
+        elif run.stage == ResearchQualityStage.FRESHNESS:
+            updated = service.complete_freshness_run(
+                session,
+                run_id=run_id,
+                outcome=payload.outcome or "",
+                link_ids=payload.link_ids,
+                evidence_ids=payload.evidence_ids,
+                checked_at=payload.checked_at,
+                superseding_evidence_id=payload.superseding_evidence_id,
+                monitoring_condition=payload.monitoring_condition,
+                partial=payload.partial,
+            )
+        else:
+            raise ValueError("Unknown quality run stage")
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _quality_error(exc)
+    return quality_run_state(updated)
+
+
+@router.post("/quality-runs/{run_id}/execute-reddit", response_model=QualityRunResponse)
+def execute_reddit_quality_run(run_id: str, request: Request, session: Session = Depends(get_session)):
+    service = _quality_execution_service(request)
+    try:
+        result = service.execute_reddit(session, run_id)
+        session.expire_all()
+        updated = service.quality_service.repository.get_run_detail(session, result["run"].id)
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _quality_error(exc)
+    return quality_run_state(updated)
+
+
+@router.post("/quality-runs/{run_id}/execute-counter-search", response_model=QualityRunResponse)
+def execute_counter_search_quality_run(run_id: str, request: Request, session: Session = Depends(get_session)):
+    service = _quality_execution_service(request)
+    try:
+        result = service.execute_counter_search(session, run_id)
+        session.expire_all()
+        updated = service.quality_service.repository.get_run_detail(session, result["run"].id)
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _quality_error(exc)
+    return quality_run_state(updated)
+
+
+@router.post("/quality-runs/{run_id}/execute-freshness", response_model=QualityRunResponse)
+def execute_freshness_quality_run(run_id: str, request: Request, session: Session = Depends(get_session)):
+    service = _quality_execution_service(request)
+    try:
+        result = service.execute_freshness(session, run_id)
+        session.expire_all()
+        updated = service.quality_service.repository.get_run_detail(session, result["run"].id)
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _quality_error(exc)
+    return quality_run_state(updated)
+
+
+@router.get("/quality-runs/{run_id}", response_model=QualityRunResponse)
+def get_quality_run(run_id: str, request: Request, session: Session = Depends(get_session)):
+    try:
+        return _quality_service(request).get_run_detail(session, run_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/threads/{thread_id}/quality-runs", response_model=list[QualityRunResponse])
+def list_thread_quality_runs(thread_id: str, request: Request, session: Session = Depends(get_session)):
+    try:
+        return _quality_service(request).list_runs_for_thread(session, thread_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
 @router.post("/situations", response_model=ResearchSituationResponse, status_code=status.HTTP_201_CREATED)
 def create_situation(payload: SituationCreateRequest, session: Session = Depends(get_session)):
     try:
@@ -683,6 +910,120 @@ def attach_situation_thread(
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return {"thread_id": thread.id, "situation_id": thread.situation_id}
+
+
+@router.post("/players/{player_id}/discover")
+def discover_player_sources(
+    player_id: int,
+    payload: PlayerDiscoveryRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    try:
+        return _eval2_service(request).start_player_discovery(
+            session,
+            player_id=player_id,
+            research_cutoff=payload.research_cutoff,
+            situation_id=payload.situation_id,
+            trigger_id=payload.trigger_id,
+            gameweek_id=payload.gameweek_id,
+            target_gameweek_id=payload.target_gameweek_id,
+            known_missing_dimensions=payload.known_missing_dimensions,
+            durable_context=payload.durable_context,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.post("/threads/{thread_id}/discover")
+def discover_thread_sources(
+    thread_id: str,
+    payload: ThreadDiscoveryRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    try:
+        return _eval2_service(request).discover_for_thread(
+            session,
+            thread_id=thread_id,
+            player_id=payload.player_id,
+            research_cutoff=payload.research_cutoff,
+            situation_id=payload.situation_id,
+            trigger_id=payload.trigger_id,
+            gameweek_id=payload.gameweek_id,
+            target_gameweek_id=payload.target_gameweek_id,
+            known_missing_dimensions=payload.known_missing_dimensions,
+            durable_context=payload.durable_context,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.get("/threads/{thread_id}/discovery")
+def get_thread_discovery(thread_id: str, request: Request, session: Session = Depends(get_session)):
+    try:
+        return _eval2_service(request).thread_execution_state(session, thread_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/threads/{thread_id}/execution")
+def get_thread_execution(thread_id: str, request: Request, session: Session = Depends(get_session)):
+    try:
+        return _eval2_service(request).thread_execution_state(session, thread_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/links/{link_id}/research")
+def research_collected_link(
+    link_id: str,
+    payload: LinkResearchEval2Request,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    try:
+        return _eval2_service(request).research_link(
+            session,
+            link_id=link_id,
+            player_resolver=_player_resolver(request),
+            research_cutoff=payload.research_cutoff,
+            target_dimensions=payload.target_dimensions,
+            situation_id=payload.situation_id,
+            trigger_id=payload.trigger_id,
+            durable_context=payload.durable_context,
+            retry_failed=payload.retry_failed,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.post("/results/{result_id}/extract-evidence")
+def extract_result_evidence(
+    result_id: str,
+    payload: EvidenceExtractionEval2Request,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    try:
+        return _eval2_service(request).extract_atomic_evidence(
+            session,
+            result_id=result_id,
+            research_cutoff=payload.research_cutoff,
+            situation_id=payload.situation_id,
+            trigger_id=payload.trigger_id,
+            durable_context=payload.durable_context,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
 @router.post("/threads/{thread_id}/collect")

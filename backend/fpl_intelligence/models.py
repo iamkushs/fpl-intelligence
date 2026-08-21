@@ -102,6 +102,20 @@ research_evidence_players = Table(
     Index("ix_research_evidence_players_player_id", "player_id"),
 )
 
+research_quality_run_links = Table(
+    "research_quality_run_links",
+    Base.metadata,
+    Column("quality_run_id", String(36), ForeignKey("research_quality_runs.id", ondelete="CASCADE"), primary_key=True),
+    Column("research_link_id", String(36), ForeignKey("research_links.id", ondelete="CASCADE"), primary_key=True),
+)
+
+research_quality_run_evidence = Table(
+    "research_quality_run_evidence",
+    Base.metadata,
+    Column("quality_run_id", String(36), ForeignKey("research_quality_runs.id", ondelete="CASCADE"), primary_key=True),
+    Column("research_evidence_id", String(36), ForeignKey("research_evidence.id", ondelete="CASCADE"), primary_key=True),
+)
+
 watchlist_suggestion_results = Table(
     "watchlist_suggestion_results",
     Base.metadata,
@@ -157,6 +171,44 @@ class SourceClusterMembershipType:
     INDEPENDENT = "independent"
     DERIVATIVE = "derivative"
     UNCLEAR = "unclear"
+
+
+class ResearchDiscoveryStatus:
+    RUNNING = "running"
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class ResearchDiscoveryPhase:
+    BROAD = "broad"
+    TARGETED = "targeted"
+
+
+class ResearchSourceCandidateStatus:
+    COLLECTED = "collected"
+    DUPLICATE = "duplicate"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+
+class ResearchPageResearchAttemptStatus:
+    RESEARCHED = "researched"
+    FAILED = "failed"
+
+
+class ResearchQualityStage:
+    REDDIT = "reddit"
+    COUNTER_SEARCH = "counter_search"
+    FRESHNESS = "freshness"
+
+
+class ResearchQualityStatus:
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
 
 
 class Player(Base):
@@ -323,7 +375,7 @@ class MonitoringTrigger(Base):
     __table_args__ = (
         CheckConstraint(
             "category IN ('appearance', 'minutes', 'attacking_return', 'set_piece', 'availability', "
-            "'team_selection', 'transfer', 'tactical_role', 'fixture', 'manager_comment', 'other')",
+            "'team_selection', 'transfer', 'tactical_role', 'fixture', 'manager_comment', 'freshness', 'other')",
             name="ck_monitoring_triggers_category",
         ),
         Index("ix_monitoring_triggers_player_active", "player_id", "active"),
@@ -427,6 +479,7 @@ class ResearchThread(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     links: Mapped[list["ResearchLink"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
     results: Mapped[list["ResearchResult"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
+    discovery_executions: Mapped[list["ResearchDiscoveryExecution"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
     watchlist_suggestions: Mapped[list[WatchlistSuggestion]] = relationship(back_populates="thread", cascade="all, delete-orphan")
     situation: Mapped["ResearchSituation | None"] = relationship(back_populates="research_threads")
 
@@ -446,17 +499,29 @@ class ResearchLink(Base):
     source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     relevance_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=ResearchLinkStatus.COLLECTED, index=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovery_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     thread: Mapped[ResearchThread] = relationship(back_populates="links")
     players: Mapped[list[Player]] = relationship(secondary=research_link_players, back_populates="research_links")
     results: Mapped[list["ResearchResult"]] = relationship(back_populates="research_link", cascade="all, delete-orphan")
+    page_research_attempts: Mapped[list["ResearchPageResearchAttempt"]] = relationship(back_populates="research_link", cascade="all, delete-orphan")
 
 
 class ResearchResult(Base):
     """Durable findings produced by researching one collected link."""
 
     __tablename__ = "research_results"
+    __table_args__ = (
+        Index(
+            "uq_research_results_link_prompt_cutoff",
+            "research_link_id",
+            "prompt_version",
+            "research_cutoff",
+            unique=True,
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     research_thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -465,12 +530,126 @@ class ResearchResult(Base):
     findings: Mapped[str] = mapped_column(Text, nullable=False)
     evidence: Mapped[str] = mapped_column(Text, nullable=False)
     uncertainty: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    research_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     researched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     thread: Mapped[ResearchThread] = relationship(back_populates="results")
     research_link: Mapped[ResearchLink] = relationship(back_populates="results")
     players: Mapped[list[Player]] = relationship(secondary=research_result_players, back_populates="research_results")
+    page_research_attempts: Mapped[list["ResearchPageResearchAttempt"]] = relationship(back_populates="research_result")
+
+
+class ResearchPageResearchAttempt(Base):
+    """Durable status for researching one link under one prompt/cutoff request."""
+
+    __tablename__ = "research_page_research_attempts"
+    __table_args__ = (
+        CheckConstraint("status IN ('researched', 'failed')", name="ck_research_page_research_attempts_status"),
+        Index(
+            "uq_research_page_attempt_link_prompt_cutoff",
+            "research_link_id",
+            "prompt_version",
+            "research_cutoff",
+            unique=True,
+        ),
+        Index("ix_research_page_attempts_thread_status", "research_thread_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    research_thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="CASCADE"), nullable=False, index=True)
+    research_link_id: Mapped[str] = mapped_column(ForeignKey("research_links.id", ondelete="CASCADE"), nullable=False, index=True)
+    research_result_id: Mapped[str | None] = mapped_column(ForeignKey("research_results.id", ondelete="SET NULL"), nullable=True, index=True)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    research_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_research_model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    model_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    research_link: Mapped[ResearchLink] = relationship(back_populates="page_research_attempts")
+    research_result: Mapped[ResearchResult | None] = relationship(back_populates="page_research_attempts")
+
+
+class ResearchDiscoveryExecution(Base):
+    """One player-centred Eval 2 source-discovery execution."""
+
+    __tablename__ = "research_discovery_executions"
+    __table_args__ = (
+        CheckConstraint("status IN ('running', 'complete', 'partial', 'failed')", name="ck_research_discovery_executions_status"),
+        Index("ix_research_discovery_executions_thread_status", "research_thread_id", "status"),
+        Index("ix_research_discovery_executions_player_status", "player_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    research_thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False, index=True)
+    research_situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="SET NULL"), nullable=True, index=True)
+    trigger_id: Mapped[str | None] = mapped_column(ForeignKey("player_research_triggers.id", ondelete="SET NULL"), nullable=True, index=True)
+    gameweek_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    target_gameweek_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    research_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    discovery_prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    page_research_prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    extraction_prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=ResearchDiscoveryStatus.RUNNING, index=True)
+    known_missing_dimensions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    durable_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    model_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    thread: Mapped[ResearchThread] = relationship(back_populates="discovery_executions")
+    player: Mapped[Player] = relationship()
+    situation: Mapped["ResearchSituation | None"] = relationship()
+    trigger: Mapped["PlayerResearchTrigger | None"] = relationship()
+    candidates: Mapped[list["ResearchSourceCandidate"]] = relationship(back_populates="execution", cascade="all, delete-orphan")
+
+
+class ResearchSourceCandidate(Base):
+    """A discovered source candidate; it is not evidence and not researched content."""
+
+    __tablename__ = "research_source_candidates"
+    __table_args__ = (
+        UniqueConstraint("discovery_execution_id", "canonical_url", name="uq_research_source_candidates_execution_url"),
+        CheckConstraint("discovery_phase IN ('broad', 'targeted')", name="ck_research_source_candidates_phase"),
+        CheckConstraint("expected_relevance IN ('high', 'medium', 'low')", name="ck_research_source_candidates_relevance"),
+        CheckConstraint("lineage_type IN ('original', 'independent', 'derivative', 'unclear')", name="ck_research_source_candidates_lineage_type"),
+        CheckConstraint("status IN ('collected', 'duplicate', 'rejected', 'failed')", name="ck_research_source_candidates_status"),
+        Index("ix_research_source_candidates_thread_phase", "research_thread_id", "discovery_phase"),
+        Index("ix_research_source_candidates_link", "research_link_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    discovery_execution_id: Mapped[str] = mapped_column(ForeignKey("research_discovery_executions.id", ondelete="CASCADE"), nullable=False, index=True)
+    research_thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="CASCADE"), nullable=False, index=True)
+    research_link_id: Mapped[str | None] = mapped_column(ForeignKey("research_links.id", ondelete="SET NULL"), nullable=True, index=True)
+    original_url: Mapped[str] = mapped_column(Text, nullable=False)
+    canonical_url: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    publisher: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    target_dimensions: Mapped[list] = mapped_column(JSON, nullable=False)
+    usefulness: Mapped[str] = mapped_column(Text, nullable=False)
+    source_category: Mapped[str] = mapped_column(String(64), nullable=False)
+    expected_relevance: Mapped[str] = mapped_column(String(16), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recency: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lineage_type: Mapped[str] = mapped_column(String(32), nullable=False, default=SourceClusterMembershipType.UNCLEAR)
+    lineage_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    query: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovery_phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    discovery_prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    research_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=ResearchSourceCandidateStatus.COLLECTED, index=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provenance: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    execution: Mapped[ResearchDiscoveryExecution] = relationship(back_populates="candidates")
+    research_link: Mapped[ResearchLink | None] = relationship()
 
 
 class ResearchSourceCluster(Base):
@@ -518,6 +697,7 @@ class ResearchEvidence(Base):
         CheckConstraint("relevance IN ('high', 'medium', 'low')", name="ck_research_evidence_relevance"),
         Index("ix_research_evidence_thread_situation", "research_thread_id", "research_situation_id"),
         Index("ix_research_evidence_source_cluster_id", "source_cluster_id"),
+        Index("uq_research_evidence_result_extraction_fingerprint", "research_result_id", "extraction_prompt_version", "extraction_fingerprint", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -536,6 +716,8 @@ class ResearchEvidence(Base):
     relevance: Mapped[str] = mapped_column(String(16), nullable=False)
     is_volatile: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", index=True)
     source_cluster_id: Mapped[str | None] = mapped_column(ForeignKey("research_source_clusters.id", ondelete="RESTRICT"), nullable=True)
+    extraction_prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    extraction_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
@@ -544,6 +726,45 @@ class ResearchEvidence(Base):
     research_result: Mapped[ResearchResult | None] = relationship(foreign_keys=[research_result_id])
     source_cluster: Mapped[ResearchSourceCluster | None] = relationship(foreign_keys=[source_cluster_id])
     hypothesis_relations: Mapped[list["EvidenceHypothesisRelation"]] = relationship(back_populates="evidence")
+
+
+class ResearchQualityRun(Base):
+    """Durable quality-control pass over research evidence or source material."""
+
+    __tablename__ = "research_quality_runs"
+    __table_args__ = (
+        Index("ix_research_quality_runs_thread_id", "thread_id"),
+        Index("ix_research_quality_runs_player_id", "player_id"),
+        Index("ix_research_quality_runs_stage", "stage"),
+        Index("ix_research_quality_runs_status", "status"),
+        Index("ix_research_quality_runs_research_cutoff", "research_cutoff"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="CASCADE"), nullable=False)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="SET NULL"), nullable=True)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_evidence_id: Mapped[str | None] = mapped_column(ForeignKey("research_evidence.id", ondelete="SET NULL"), nullable=True)
+    superseding_evidence_id: Mapped[str | None] = mapped_column(ForeignKey("research_evidence.id", ondelete="SET NULL"), nullable=True)
+    research_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    challenged_claim: Mapped[str | None] = mapped_column(Text, nullable=True)
+    questions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    thread: Mapped[ResearchThread] = relationship()
+    player: Mapped[Player] = relationship()
+    situation: Mapped[ResearchSituation | None] = relationship()
+    target_evidence: Mapped[ResearchEvidence | None] = relationship(foreign_keys=[target_evidence_id])
+    superseding_evidence: Mapped[ResearchEvidence | None] = relationship(foreign_keys=[superseding_evidence_id])
+    links: Mapped[list[ResearchLink]] = relationship(secondary=research_quality_run_links)
+    evidence: Mapped[list[ResearchEvidence]] = relationship(secondary=research_quality_run_evidence)
 
 
 class EvidenceHypothesisRelation(Base):

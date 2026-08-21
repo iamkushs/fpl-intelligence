@@ -1,5 +1,7 @@
 """Data access for collected links and durable link research."""
 
+from datetime import timezone
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -30,6 +32,13 @@ class ResearchPersistenceRepository:
             select(ResearchLink)
             .where(ResearchLink.id == link_id)
             .options(selectinload(ResearchLink.players))
+        )
+
+    def get_link_by_canonical_url(self, session: Session, *, thread_id: str, canonical_url: str) -> ResearchLink | None:
+        return session.scalar(
+            select(ResearchLink)
+            .where(ResearchLink.research_thread_id == thread_id, ResearchLink.canonical_url == canonical_url)
+            .options(selectinload(ResearchLink.players), selectinload(ResearchLink.results))
         )
 
     def list_results(self, session: Session, thread_id: str) -> list[ResearchResult]:
@@ -91,6 +100,25 @@ class ResearchPersistenceRepository:
         session.flush()
         return result
 
+    def get_result_by_link_prompt_cutoff(
+        self,
+        session: Session,
+        *,
+        research_link_id: str,
+        prompt_version: str,
+        research_cutoff,
+    ) -> ResearchResult | None:
+        candidates = session.scalars(
+            select(ResearchResult).where(
+                ResearchResult.research_link_id == research_link_id,
+                ResearchResult.prompt_version == prompt_version,
+            )
+        )
+        for result in candidates:
+            if _normalize_result_cutoff(result.research_cutoff) == _normalize_result_cutoff(research_cutoff):
+                return result
+        return None
+
     def results_for_player(self, session: Session, player_id: int) -> list[ResearchResult]:
         statement = (
             select(ResearchResult)
@@ -104,3 +132,11 @@ class ResearchPersistenceRepository:
             .order_by(ResearchResult.researched_at.desc(), ResearchResult.id)
         )
         return list(session.scalars(statement).unique())
+
+
+def _normalize_result_cutoff(value):
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
