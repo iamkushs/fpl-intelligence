@@ -20,6 +20,8 @@ from fpl_intelligence.models import (
     ResearchSourceCluster,
     ResearchEvidenceBundle,
     ResearchDimensionAssessment,
+    ResearchDeepRun,
+    ResearchPlayerSynthesis,
 )
 from fpl_intelligence.repositories.research_documents import ResearchDocumentRepository
 from fpl_intelligence.repositories.research_jobs import ResearchJobRepository
@@ -38,6 +40,7 @@ from fpl_intelligence.research.quality_execution import Eval2QualityExecutionSer
 from fpl_intelligence.repositories.research_persistence import ResearchPersistenceRepository
 from fpl_intelligence.research.evidence import ResearchEvidenceService
 from fpl_intelligence.research.evidence_bundles import EvidenceBundleService
+from fpl_intelligence.research.deep_player import DeepPlayerResearchService
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -490,6 +493,51 @@ class EvidenceBundleCreateRequest(BaseModel):
     research_cutoff: datetime
     situation_id: str | None = None
     evidence_ids: list[str] | None = None
+
+
+class DeepRunCreateRequest(BaseModel):
+    player_id: int
+    research_cutoff: datetime
+    situation_id: str | None = None
+    trigger_id: str | None = None
+    target_dimensions: list[str] | None = None
+
+
+def _deep_service(request: Request) -> DeepPlayerResearchService:
+    return request.app.state.deep_player_research_service
+
+
+def _deep_run_response(run: ResearchDeepRun) -> dict:
+    return {"id":run.id,"thread_id":run.thread_id,"player_id":run.player_id,"situation_id":run.situation_id,"trigger_id":run.trigger_id,"research_cutoff":run.research_cutoff,"status":run.status,"target_dimensions":run.target_dimensions,"discovery_execution_id":run.discovery_execution_id,"quality_run_ids":[x.id for x in run.quality_runs],"assessment_ids":[x.id for x in run.assessments],"blind_spots":[{"id":x.id,"dimension":x.dimension,"category":x.category,"question":x.question,"status":x.status,"resolution_summary":x.resolution_summary} for x in run.blind_spots],"synthesis":_synthesis_response(run.synthesis) if run.synthesis else None}
+
+
+def _synthesis_response(item: ResearchPlayerSynthesis) -> dict:
+    return {key:getattr(item,key) for key in ("id","deep_run_id","thread_id","player_id","situation_id","research_cutoff","overall_research_state","executive_summary","dimension_summaries","key_strengths","key_risks","contradictions","missing_information","future_monitoring","prompt_version")}
+
+
+@router.post("/threads/{thread_id}/deep-runs", status_code=status.HTTP_201_CREATED)
+def create_deep_run(thread_id: str, payload: DeepRunCreateRequest, request: Request, session: Session = Depends(get_session)):
+    try: return _deep_run_response(_deep_service(request).create_run(session,thread_id=thread_id,**payload.model_dump()))
+    except (LookupError,ValueError) as exc: session.rollback(); _evidence_error(exc)
+
+
+@router.post("/deep-runs/{run_id}/execute")
+def execute_deep_run(run_id: str, request: Request, session: Session = Depends(get_session)):
+    try: return _deep_run_response(_deep_service(request).execute_full_run(session,run_id))
+    except (LookupError,ValueError) as exc: session.rollback(); _evidence_error(exc)
+
+
+@router.get("/deep-runs/{run_id}")
+def get_deep_run(run_id: str, request: Request, session: Session = Depends(get_session)):
+    try: return _deep_run_response(_deep_service(request).get_run(session,run_id))
+    except LookupError as exc: _evidence_error(exc)
+
+
+@router.get("/players/{player_id}/latest-synthesis")
+def latest_player_synthesis(player_id: int, request: Request, session: Session = Depends(get_session)):
+    item=_deep_service(request).get_latest_synthesis(session,player_id)
+    if item is None: raise HTTPException(status_code=404,detail="ResearchPlayerSynthesis not found")
+    return _synthesis_response(item)
 
 
 def _bundle_response(bundle: ResearchEvidenceBundle, service: EvidenceBundleService, session: Session) -> dict:
