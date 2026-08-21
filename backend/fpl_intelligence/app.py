@@ -22,6 +22,7 @@ from fpl_intelligence.research.two_stage import (
 from fpl_intelligence.research.web_retrieval import ScraplingPageRetriever
 from fpl_intelligence.research.evidence_bundles import EvidenceBundleService
 from fpl_intelligence.research.deep_player import DeepPlayerResearchService
+from fpl_intelligence.research.production_providers import CodexBlindSpotProvider, CodexBundleAssessmentProvider, CodexFinalSynthesisProvider, CodexQualityProvider
 from fpl_intelligence.research.source_discovery import (
     CodexEval2AtomicEvidenceProvider,
     CodexEval2DiscoveryProvider,
@@ -78,10 +79,11 @@ def create_app(
     app.state.eval2_quality_execution_service = eval2_quality_execution_service or Eval2QualityExecutionService(
         source_service=app.state.eval2_source_discovery_service,
         player_resolver=PlayerResolver([]),
+        reddit_provider=CodexQualityProvider(app.state.codex_service,"reddit"), counter_provider=CodexQualityProvider(app.state.codex_service,"counter"), freshness_provider=CodexQualityProvider(app.state.codex_service,"freshness"),
     )
     app.state.deep_player_research_service = DeepPlayerResearchService(
         source_service=app.state.eval2_source_discovery_service, quality_execution=app.state.eval2_quality_execution_service,
-        player_resolver=PlayerResolver([]), bundle_service=EvidenceBundleService(),
+        player_resolver=PlayerResolver([]), bundle_service=EvidenceBundleService(CodexBundleAssessmentProvider(app.state.codex_service)), blind_spot_provider=CodexBlindSpotProvider(app.state.codex_service), synthesis_provider=CodexFinalSynthesisProvider(app.state.codex_service),
     )
     app.state.discovery_service = DiscoveryService(CodexDiscoveryAnalyzer(app.state.codex_service))
     app.include_router(research_router)

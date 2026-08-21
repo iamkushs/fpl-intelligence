@@ -74,7 +74,27 @@ class DeepPlayerResearchService:
             if len(findings)>5 or any(len(item.get("suggested_queries",[]))>3 for item in findings): raise ValueError("Invalid blind spot output")
             for item in findings: session.add(ResearchBlindSpotFinding(deep_run_id=run.id,dimension=item.get("dimension"),category=str(item["category"]),question=str(item["question"]),why_it_matters=str(item["why_it_matters"])))
             session.commit()
-        for finding in run.blind_spots: finding.status="unresolved"; finding.resolution_summary="No targeted source evidence was persisted in this bounded pass."
+        run=self.get_run(session,run.id)
+        findings=list(run.blind_spots)
+        if findings and run.status != ResearchDeepRunStatus.BLIND_SPOT_COMPLETE and hasattr(self.source_service, "start_player_discovery"):
+            questions=[item.question for item in findings]
+            context={"deep_run_id":run.id,"blind_spot_findings":[{"finding_id":item.id,"dimension":item.dimension,"question":item.question,"category":item.category} for item in findings]}
+            state=self.source_service.start_player_discovery(session,thread_id=run.thread_id,player_id=run.player_id,research_cutoff=run.research_cutoff,situation_id=run.situation_id,trigger_id=run.trigger_id,known_missing_dimensions=list(dict.fromkeys([item.dimension for item in findings if item.dimension])),research_questions=questions,targeted_only=True,durable_context=context)
+            run.failure_reason=(run.failure_reason or None)
+            for candidate in self.source_service.list_execution_candidates(session,state["id"]):
+                if not candidate.research_link_id: continue
+                result=self.source_service.research_link(session,link_id=candidate.research_link_id,player_resolver=self.player_resolver,research_cutoff=run.research_cutoff,target_dimensions=run.target_dimensions,situation_id=run.situation_id,trigger_id=run.trigger_id,durable_context=context)
+                for result_id in result["result_ids"]: self.source_service.extract_atomic_evidence(session,result_id=result_id,research_cutoff=run.research_cutoff,situation_id=run.situation_id,trigger_id=run.trigger_id,durable_context=context)
+            evidence=list(session.scalars(select(ResearchEvidence).join(ResearchEvidence.players).where(ResearchEvidence.research_thread_id==run.thread_id,Player.id==run.player_id)))
+            affected=set()
+            for finding in findings:
+                matches=[item for item in evidence if finding.dimension and item.claim_type==finding.dimension]
+                if matches:
+                    finding.evidence.extend(item for item in matches if item not in finding.evidence); finding.status="researched"; finding.resolution_summary="Targeted evidence was extracted for the requested dimension."; affected.add(finding.dimension)
+                else: finding.status="unresolved"; finding.resolution_summary="The combined targeted pass did not extract relevant evidence."
+            self._assess_all(session,run,sorted(affected)); session.commit()
+        else:
+            for finding in findings: finding.status="unresolved"; finding.resolution_summary="No targeted source evidence was persisted in this bounded pass."
         run.status=ResearchDeepRunStatus.BLIND_SPOT_COMPLETE; session.commit(); return self.get_run(session,run.id)
     def synthesize(self,session,run_id):
         run=self.get_run(session,run_id)
