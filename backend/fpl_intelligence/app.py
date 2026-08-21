@@ -32,6 +32,8 @@ from fpl_intelligence.research.source_discovery import (
 from fpl_intelligence.research.quality import ResearchQualityService
 from fpl_intelligence.research.quality_execution import Eval2QualityExecutionService
 from fpl_intelligence.watchlist.discovery import CodexDiscoveryAnalyzer, DiscoveryService
+from fpl_intelligence.watchlist.pulse import PlayerPulseService
+from fpl_intelligence.research.orchestration import WeeklyResearchOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,9 @@ def create_app(
     app.state.deep_player_research_service = DeepPlayerResearchService(
         source_service=app.state.eval2_source_discovery_service, quality_execution=app.state.eval2_quality_execution_service,
         player_resolver=PlayerResolver([]), bundle_service=EvidenceBundleService(CodexBundleAssessmentProvider(app.state.codex_service)), blind_spot_provider=CodexBlindSpotProvider(app.state.codex_service), synthesis_provider=CodexFinalSynthesisProvider(app.state.codex_service),
+    )
+    app.state.weekly_research_orchestrator = WeeklyResearchOrchestrator(
+        pulse_service=PlayerPulseService(app.state.fpl_adapter), deep_service=app.state.deep_player_research_service
     )
     app.state.discovery_service = DiscoveryService(CodexDiscoveryAnalyzer(app.state.codex_service))
     app.include_router(research_router)
