@@ -4,13 +4,18 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session, selectinload
 
 from fpl_intelligence.api.research import EvidenceResponse, _evidence_responses, get_session
 from fpl_intelligence.integrations.fpl.errors import OfficialFPLError
 from fpl_intelligence.integrations.fpl.snapshot import FPLSnapshotService
-from fpl_intelligence.models import Player, WatchlistEntry
+from fpl_intelligence.models import (
+    EvidenceRelation, Player, ResearchDeepRun, ResearchDimensionAssessment,
+    ResearchEvidence, ResearchEvidenceBundle, ResearchEvidenceBundleMember,
+    ResearchLink, ResearchPageResearchAttempt, ResearchSituation,
+    ResearchSourceCluster, WatchlistEntry,
+)
 from fpl_intelligence.research.persistence import ResearchPersistenceService
 from fpl_intelligence.research.situations import ResearchSituationService
 from fpl_intelligence.research.evidence import ResearchEvidenceService
@@ -336,6 +341,136 @@ def get_player_details(
         research_triggers=[trigger_response(item) for item in triggers],
         monitoring_triggers=[monitoring_response(item) for item in monitors],
     )
+
+
+def _intelligence_evidence(member: ResearchEvidenceBundleMember, relations: list[EvidenceRelation]) -> dict:
+    evidence = member.evidence
+    link = evidence.research_link
+    cluster = evidence.source_cluster
+    lineage = "unknown"
+    if cluster and link:
+        membership = next((item for item in cluster.memberships if item.research_link_id == link.id), None)
+        if membership:
+            lineage = membership.lineage_type
+    related = [
+        {"relation": relation.relation_type, "other_evidence_id": relation.to_evidence_id if relation.from_evidence_id == evidence.id else relation.from_evidence_id,
+         "rationale": relation.rationale}
+        for relation in relations
+        if relation.from_evidence_id == evidence.id or relation.to_evidence_id == evidence.id
+    ]
+    return {
+        "id": evidence.id, "claim": evidence.claim, "claim_type": evidence.claim_type,
+        "evidence_type": evidence.evidence_type, "reliability": evidence.reliability,
+        "relevance": evidence.relevance, "published_at": evidence.published_at,
+        "observed_at": evidence.observed_at, "retrieved_at": evidence.retrieved_at,
+        "member_role": member.role, "relationships": related,
+        "source": None if link is None else {"url": link.original_url, "canonical_url": link.canonical_url,
+                                               "domain": link.domain, "title": link.title,
+                                               "source_type": link.source_type, "status": link.status},
+        "source_cluster": None if cluster is None else {"lineage": lineage, "narrative": cluster.narrative},
+    }
+
+
+def _intelligence_assessment(assessment: ResearchDimensionAssessment, relations: list[EvidenceRelation]) -> dict:
+    bundle = assessment.bundle
+    return {
+        "id": assessment.id, "dimension": assessment.dimension, "thesis": assessment.thesis,
+        "rationale": assessment.rationale, "confidence": assessment.confidence,
+        "bundle_strength": assessment.bundle_strength, "contradiction_summary": assessment.contradiction_summary,
+        "missing_information": assessment.missing_information or [], "evidence_count": assessment.evidence_count,
+        "distinct_source_count": assessment.distinct_source_count,
+        "independent_source_count": assessment.independent_source_count,
+        "contradiction_count": assessment.contradiction_count, "superseded_count": assessment.superseded_count,
+        "research_cutoff": assessment.research_cutoff,
+        "evidence": [_intelligence_evidence(member, relations) for member in sorted(bundle.members, key=lambda item: (item.role, item.evidence_id))],
+    }
+
+
+def _intelligence_source(link: ResearchLink, bucket: str, attempt: ResearchPageResearchAttempt | None = None) -> dict:
+    metadata = next((result.source_metadata for result in sorted(link.results, key=lambda item: (item.research_cutoff or item.researched_at, item.researched_at), reverse=True) if result.source_metadata), None) or {}
+    return {
+        "id": link.id, "url": link.original_url, "canonical_url": link.canonical_url, "domain": link.domain,
+        "title": link.title, "source_type": link.source_type, "status": bucket,
+        "published_at": metadata.get("published_at"), "retrieved_at": metadata.get("retrieved_at"),
+        "discovered_at": link.discovered_at, "failure_reason": attempt.failure_reason if attempt else link.failure_reason,
+    }
+
+
+@router.get("/players/{player_id}/intelligence")
+def get_player_intelligence(player_id: int, request: Request, session: Session = Depends(get_session)):
+    """A bounded dossier read model; it never creates research or derives recommendations."""
+    official = next((item for item in _snapshot(request).players if item.id == player_id), None)
+    if session.get(Player, player_id) is None or official is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Player not found")
+
+    runs = list(session.scalars(
+        select(ResearchDeepRun).where(ResearchDeepRun.player_id == player_id).options(
+            selectinload(ResearchDeepRun.synthesis),
+            selectinload(ResearchDeepRun.assessments).selectinload(ResearchDimensionAssessment.bundle)
+            .selectinload(ResearchEvidenceBundle.members).selectinload(ResearchEvidenceBundleMember.evidence)
+            .selectinload(ResearchEvidence.research_link),
+            selectinload(ResearchDeepRun.assessments).selectinload(ResearchDimensionAssessment.bundle)
+            .selectinload(ResearchEvidenceBundle.members).selectinload(ResearchEvidenceBundleMember.evidence)
+            .selectinload(ResearchEvidence.source_cluster).selectinload(ResearchSourceCluster.memberships),
+            selectinload(ResearchDeepRun.quality_runs), selectinload(ResearchDeepRun.blind_spots),
+        )
+    ))
+    usable = [run for run in runs if run.synthesis is not None and run.status in {"completed", "partial"}]
+    latest = max(usable, key=lambda run: (run.research_cutoff, run.completed_at or run.updated_at, run.id), default=None)
+    watchlist = WatchlistService().get(session, player_id)
+    triggers, monitors = TriggerService.player_triggers(session, player_id)
+    links = list(session.scalars(select(ResearchLink).where(ResearchLink.players.any(Player.id == player_id)).options(
+        selectinload(ResearchLink.results), selectinload(ResearchLink.page_research_attempts)
+    )))
+    sources = {"researched": [], "collected": [], "failed": []}
+    for link in sorted(links, key=lambda item: (item.discovered_at, item.id), reverse=True):
+        attempt = max(link.page_research_attempts, key=lambda item: (item.research_cutoff, item.attempted_at, item.id), default=None)
+        if attempt and attempt.status == "failed":
+            sources["failed"].append(_intelligence_source(link, "failed", attempt))
+        elif (attempt and attempt.status == "researched" and attempt.research_result_id) or link.results:
+            sources["researched"].append(_intelligence_source(link, "researched", attempt))
+        else:
+            sources["collected"].append(_intelligence_source(link, "collected", attempt))
+
+    assessments = []
+    quality_runs = []
+    blind_spots = []
+    situation = None
+    if latest:
+        final_by_dimension: dict[str, ResearchDimensionAssessment] = {}
+        for assessment in sorted(latest.assessments, key=lambda item: (item.dimension, item.updated_at, item.id), reverse=True):
+            final_by_dimension.setdefault(assessment.dimension, assessment)
+        evidence_ids = [member.evidence_id for assessment in final_by_dimension.values() for member in assessment.bundle.members]
+        relations = list(session.scalars(select(EvidenceRelation).where(or_(EvidenceRelation.from_evidence_id.in_(evidence_ids or [""]), EvidenceRelation.to_evidence_id.in_(evidence_ids or [""])))))
+        assessments = [_intelligence_assessment(item, relations) for item in sorted(final_by_dimension.values(), key=lambda item: item.dimension)]
+        quality_runs = [{"id": item.id, "stage": item.stage, "status": item.status, "outcome": item.outcome,
+                         "challenged_claim": item.challenged_claim, "failure_reason": item.failure_reason,
+                         "created_at": item.created_at, "completed_at": item.completed_at, "checked_at": item.checked_at}
+                        for item in sorted(latest.quality_runs, key=lambda item: (item.created_at, item.id), reverse=True)]
+        blind_spots = [{"id": item.id, "dimension": item.dimension, "category": item.category, "question": item.question,
+                        "why_it_matters": item.why_it_matters, "status": item.status, "resolution_summary": item.resolution_summary}
+                       for item in latest.blind_spots]
+        if latest.situation_id:
+            item = session.scalar(select(ResearchSituation).where(ResearchSituation.id == latest.situation_id).options(selectinload(ResearchSituation.hypotheses)))
+            if item:
+                situation = {"id": item.id, "title": item.title, "context": item.context, "fpl_relevance": item.fpl_relevance,
+                             "status": item.status, "hypotheses": [hypothesis.statement for hypothesis in item.hypotheses if hypothesis.active]}
+    synthesis = None if latest is None else latest.synthesis
+    return {
+        "player": PlayerIdentityResponse.model_validate(official, from_attributes=True).model_dump(),
+        "watchlist": {"active": bool(watchlist and watchlist.active), "pinned": bool(watchlist and watchlist.active and watchlist.pinned)},
+        "latest_deep_run": None if latest is None else {"id": latest.id, "status": latest.status, "research_cutoff": latest.research_cutoff, "completed_at": latest.completed_at, "failure_reason": latest.failure_reason},
+        "latest_synthesis": None if synthesis is None else {"id": synthesis.id, "overall_research_state": synthesis.overall_research_state,
+            "executive_summary": synthesis.executive_summary, "dimension_summaries": synthesis.dimension_summaries,
+            "key_strengths": synthesis.key_strengths, "key_risks": synthesis.key_risks, "contradictions": synthesis.contradictions,
+            "missing_information": synthesis.missing_information, "future_monitoring": synthesis.future_monitoring, "research_cutoff": synthesis.research_cutoff},
+        "dimension_assessments": assessments, "sources": sources, "situation": situation,
+        "triggers": [trigger_response(item).model_dump() for item in triggers], "quality_runs": quality_runs,
+        "blind_spots": blind_spots, "monitoring_triggers": [monitoring_response(item).model_dump() for item in monitors if item.active],
+        "research_history": [{"id": run.id, "status": run.status, "research_cutoff": run.research_cutoff, "created_at": run.created_at,
+                              "completed_at": run.completed_at, "overall_research_state": run.synthesis.overall_research_state if run.synthesis else None,
+                              "is_latest": bool(latest and run.id == latest.id)} for run in sorted(runs, key=lambda item: (item.research_cutoff, item.id), reverse=True)],
+    }
 
 
 @router.get("/players/{player_id}/situations", response_model=list[PlayerSituationContextResponse])
