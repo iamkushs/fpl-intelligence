@@ -228,6 +228,8 @@ class Eval2SourceDiscoveryService:
         gameweek_id: int | None = None,
         target_gameweek_id: int | None = None,
         known_missing_dimensions: list[str] | None = None,
+        research_questions: list[str] | None = None,
+        targeted_only: bool = False,
         durable_context: dict | None = None,
     ) -> dict:
         cutoff = _require_cutoff(research_cutoff)
@@ -275,21 +277,17 @@ class Eval2SourceDiscoveryService:
         session.commit()
         session.refresh(execution)
         failures: list[dict] = []
-        broad = self._run_discovery_phase(
-            session,
-            execution=execution,
-            phase=ResearchDiscoveryPhase.BROAD,
-            known_missing_dimensions=known_missing_dimensions or [],
-            durable_context=durable_context or {},
-            failures=failures,
-        )
+        context = {**(durable_context or {}), "research_questions": research_questions or []}
+        broad = DiscoveryOutput()
+        if not targeted_only:
+            broad = self._run_discovery_phase(session, execution=execution, phase=ResearchDiscoveryPhase.BROAD, known_missing_dimensions=known_missing_dimensions or [], durable_context=context, failures=failures)
         targeted_dimensions = list(dict.fromkeys([*(known_missing_dimensions or []), *broad.known_gaps]))
         self._run_discovery_phase(
             session,
             execution=execution,
             phase=ResearchDiscoveryPhase.TARGETED,
             known_missing_dimensions=targeted_dimensions,
-            durable_context=durable_context or {},
+            durable_context=context,
             failures=failures,
         )
         candidates = self.list_execution_candidates(session, execution.id)
