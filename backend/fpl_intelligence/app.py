@@ -20,6 +20,8 @@ from fpl_intelligence.research.two_stage import (
     TwoStageResearchService,
 )
 from fpl_intelligence.research.web_retrieval import ScraplingPageRetriever
+from fpl_intelligence.research.evidence_bundles import EvidenceBundleService
+from fpl_intelligence.research.deep_player import DeepPlayerResearchService
 from fpl_intelligence.research.source_discovery import (
     CodexEval2AtomicEvidenceProvider,
     CodexEval2DiscoveryProvider,
@@ -76,6 +78,10 @@ def create_app(
     app.state.eval2_quality_execution_service = eval2_quality_execution_service or Eval2QualityExecutionService(
         source_service=app.state.eval2_source_discovery_service,
         player_resolver=PlayerResolver([]),
+    )
+    app.state.deep_player_research_service = DeepPlayerResearchService(
+        source_service=app.state.eval2_source_discovery_service, quality_execution=app.state.eval2_quality_execution_service,
+        player_resolver=PlayerResolver([]), bundle_service=EvidenceBundleService(),
     )
     app.state.discovery_service = DiscoveryService(CodexDiscoveryAnalyzer(app.state.codex_service))
     app.include_router(research_router)

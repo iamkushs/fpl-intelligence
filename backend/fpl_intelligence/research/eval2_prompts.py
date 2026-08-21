@@ -9,6 +9,21 @@ from dataclasses import dataclass
 EVAL2_SOURCE_DISCOVERY_PROMPT_VERSION = "eval2_source_discovery_v1"
 EVAL2_PAGE_RESEARCH_PROMPT_VERSION = "eval2_page_research_v1"
 EVAL2_EVIDENCE_BUNDLE_ASSESSMENT_PROMPT_VERSION = "eval2_evidence_bundle_assessment_v1"
+EVAL2_DEEP_PLAYER_RESEARCH_PROMPT_VERSION = "eval2_deep_player_research_v1"
+EVAL2_BLIND_SPOT_PROMPT_VERSION = "eval2_blind_spot_v1"
+EVAL2_FINAL_PLAYER_SYNTHESIS_PROMPT_VERSION = "eval2_final_player_synthesis_v1"
+
+
+def deep_player_research_prompt(*, context: dict):
+    return PromptEnvelope(EVAL2_DEEP_PLAYER_RESEARCH_PROMPT_VERSION, "Research this PLAYER comprehensively as an FPL asset. Situation and trigger are context only; a trigger is never a recommendation. Preserve contradiction and uncertainty, do not fabricate evidence, do not write biography or transfer recommendations.\n" + json.dumps(context, default=str, sort_keys=True))
+
+
+def blind_spot_prompt(*, context: dict):
+    return PromptEnvelope(EVAL2_BLIND_SPOT_PROMPT_VERSION, "Identify at most five material research blind spots. Return exactly findings[]; each finding contains dimension (optional), category, question, why_it_matters, preferred_source_types[], suggested_queries[] (at most three). No generic filler or recommendations.\n" + json.dumps(context, default=str, sort_keys=True))
+
+
+def final_player_synthesis_prompt(*, context: dict):
+    return PromptEnvelope(EVAL2_FINAL_PLAYER_SYNTHESIS_PROMPT_VERSION, "Produce durable PLAYER INTELLIGENCE, not a recommendation. Return exactly overall_research_state, executive_summary, dimension_summaries, key_strengths, key_risks, contradictions, missing_information, future_monitoring. Do not use buy, sell, transfer, hold, captain, bench, start, rank, or best option language.\n" + json.dumps(context, default=str, sort_keys=True))
 
 
 def evidence_bundle_assessment_prompt(*, context: dict):

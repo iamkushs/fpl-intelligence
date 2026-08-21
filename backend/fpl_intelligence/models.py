@@ -216,6 +216,10 @@ class ResearchEvidenceBundleStatus:
     ASSESSED = "assessed"
 
 
+class ResearchDeepRunStatus:
+    PENDING = "pending"; RUNNING = "running"; RESEARCH_COMPLETE = "research_complete"; BLIND_SPOT_COMPLETE = "blind_spot_complete"; COMPLETED = "completed"; PARTIAL = "partial"; FAILED = "failed"
+
+
 class Player(Base):
     """A durable reference to an official FPL player."""
 
@@ -864,6 +868,52 @@ class ResearchDimensionAssessment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     bundle: Mapped[ResearchEvidenceBundle] = relationship(back_populates="assessment")
+
+
+research_deep_run_assessments = Table("research_deep_run_assessments", Base.metadata, Column("deep_run_id", String(36), ForeignKey("research_deep_runs.id", ondelete="CASCADE"), primary_key=True), Column("dimension_assessment_id", String(36), ForeignKey("research_dimension_assessments.id", ondelete="RESTRICT"), primary_key=True))
+research_deep_run_quality_runs = Table("research_deep_run_quality_runs", Base.metadata, Column("deep_run_id", String(36), ForeignKey("research_deep_runs.id", ondelete="CASCADE"), primary_key=True), Column("quality_run_id", String(36), ForeignKey("research_quality_runs.id", ondelete="RESTRICT"), primary_key=True))
+research_blind_spot_finding_evidence = Table("research_blind_spot_finding_evidence", Base.metadata, Column("finding_id", String(36), ForeignKey("research_blind_spot_findings.id", ondelete="CASCADE"), primary_key=True), Column("evidence_id", String(36), ForeignKey("research_evidence.id", ondelete="RESTRICT"), primary_key=True))
+
+
+class ResearchDeepRun(Base):
+    __tablename__ = "research_deep_runs"
+    __table_args__ = (CheckConstraint("status IN ('pending', 'running', 'research_complete', 'blind_spot_complete', 'completed', 'partial', 'failed')", name="ck_research_deep_runs_status"), Index("ix_research_deep_runs_player_cutoff", "player_id", "research_cutoff"), Index("ix_research_deep_runs_thread_id", "thread_id"), Index("ix_research_deep_runs_status", "status"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="CASCADE"), nullable=False)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="SET NULL"))
+    trigger_id: Mapped[str | None] = mapped_column(ForeignKey("player_research_triggers.id", ondelete="SET NULL"))
+    research_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=ResearchDeepRunStatus.PENDING)
+    target_dimensions: Mapped[list] = mapped_column(JSON, nullable=False)
+    discovery_execution_id: Mapped[str | None] = mapped_column(ForeignKey("research_discovery_executions.id", ondelete="SET NULL"))
+    orchestration_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True)); completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now()); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    assessments: Mapped[list[ResearchDimensionAssessment]] = relationship(secondary=research_deep_run_assessments)
+    quality_runs: Mapped[list[ResearchQualityRun]] = relationship(secondary=research_deep_run_quality_runs)
+    blind_spots: Mapped[list["ResearchBlindSpotFinding"]] = relationship(back_populates="deep_run", cascade="all, delete-orphan")
+    synthesis: Mapped["ResearchPlayerSynthesis | None"] = relationship(back_populates="deep_run", uselist=False, cascade="all, delete-orphan")
+
+
+class ResearchBlindSpotFinding(Base):
+    __tablename__ = "research_blind_spot_findings"
+    __table_args__ = (CheckConstraint("status IN ('open', 'researched', 'unresolved')", name="ck_research_blind_spot_findings_status"), Index("ix_research_blind_spot_findings_run_status", "deep_run_id", "status"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4())); deep_run_id: Mapped[str] = mapped_column(ForeignKey("research_deep_runs.id", ondelete="CASCADE"), nullable=False)
+    dimension: Mapped[str | None] = mapped_column(String(64)); category: Mapped[str] = mapped_column(String(64), nullable=False); question: Mapped[str] = mapped_column(Text, nullable=False); why_it_matters: Mapped[str] = mapped_column(Text, nullable=False); status: Mapped[str] = mapped_column(String(16), nullable=False, default="open"); resolution_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now()); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    deep_run: Mapped[ResearchDeepRun] = relationship(back_populates="blind_spots"); evidence: Mapped[list[ResearchEvidence]] = relationship(secondary=research_blind_spot_finding_evidence)
+
+
+class ResearchPlayerSynthesis(Base):
+    __tablename__ = "research_player_syntheses"
+    __table_args__ = (CheckConstraint("overall_research_state IN ('clear', 'mixed', 'thin', 'unresolved')", name="ck_research_player_syntheses_state"), Index("ix_research_player_syntheses_player_cutoff", "player_id", "research_cutoff"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4())); deep_run_id: Mapped[str] = mapped_column(ForeignKey("research_deep_runs.id", ondelete="CASCADE"), nullable=False, unique=True)
+    thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="CASCADE"), nullable=False); player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False); situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="SET NULL")); research_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    overall_research_state: Mapped[str] = mapped_column(String(16), nullable=False); executive_summary: Mapped[str] = mapped_column(Text, nullable=False); dimension_summaries: Mapped[list] = mapped_column(JSON, nullable=False); key_strengths: Mapped[list] = mapped_column(JSON, nullable=False); key_risks: Mapped[list] = mapped_column(JSON, nullable=False); contradictions: Mapped[list] = mapped_column(JSON, nullable=False); missing_information: Mapped[list] = mapped_column(JSON, nullable=False); future_monitoring: Mapped[list] = mapped_column(JSON, nullable=False); prompt_version: Mapped[str] = mapped_column(String(64), nullable=False); model_metadata: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now()); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    deep_run: Mapped[ResearchDeepRun] = relationship(back_populates="synthesis")
 
 
 class ResearchRun(Base):
