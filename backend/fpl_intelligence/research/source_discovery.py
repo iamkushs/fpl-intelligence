@@ -341,7 +341,8 @@ class Eval2SourceDiscoveryService:
         situation = self._require_situation(session, situation_id) if situation_id else thread.situation
         trigger = self._require_trigger(session, trigger_id) if trigger_id else None
         try:
-            page = self.retriever.retrieve(link.original_url)
+            retrieved = self.retriever.retrieve_page(link.original_url) if hasattr(self.retriever, "retrieve_page") else None
+            page = retrieved.text if retrieved is not None else self.retriever.retrieve(link.original_url)
             envelope = page_research_prompt(
                 player_payload=player_payload,
                 situation_payload=_situation_payload(situation),
@@ -376,6 +377,7 @@ class Eval2SourceDiscoveryService:
                 source_metadata={
                     "target_dimensions": target_dimensions or _candidate_dimensions(session, link.id),
                     "page_research_model_id": (link.discovery_metadata or {}).get("page_research_model_id"),
+                    **({"final_url": retrieved.final_url, "retrieved_at": retrieved.retrieved_at.isoformat(), "content_hash": retrieved.content_hash, "fetch_mode": retrieved.fetch_mode} if retrieved is not None else {}),
                 },
             )
             self._upsert_page_research_attempt(
