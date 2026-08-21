@@ -17,3 +17,12 @@ def test_create_run_is_player_centric_and_uses_valid_dimensions(db):
 def test_create_run_requires_canonical_player(db):
     session,thread=db
     with pytest.raises(LookupError): service().create_run(session,thread_id=thread.id,player_id=9,research_cutoff=datetime.now(timezone.utc))
+
+class Blind:
+    def find(self, **kwargs): return {"findings":[{"dimension":"penalties","category":"order","question":"Who takes penalties?","why_it_matters":"Role can change.","preferred_source_types":["official"],"suggested_queries":["penalty order"]}]}
+class Synthesis:
+    def synthesize(self, **kwargs): return {"overall_research_state":"thin","executive_summary":"Research remains limited.","dimension_summaries":[],"key_strengths":[],"key_risks":[],"contradictions":[],"missing_information":["Evidence"],"future_monitoring":[{"category":"availability","description":"Recheck availability after press conference.","condition":{"event":"press_conference"}}]}
+def test_blind_spots_and_synthesis_are_durable_and_monitoring_is_idempotent(db):
+    session,thread=db; item=DeepPlayerResearchService(source_service=object(),quality_execution=object(),player_resolver=PlayerResolver([]),bundle_service=EvidenceBundleService(),blind_spot_provider=Blind(),synthesis_provider=Synthesis())
+    run=item.create_run(session,thread_id=thread.id,player_id=1,research_cutoff=datetime.now(timezone.utc)); item.run_blind_spot_pass(session,run.id); one=item.synthesize(session,run.id); two=item.synthesize(session,run.id)
+    assert one.synthesis.id==two.synthesis.id and one.blind_spots[0].status=="unresolved"
