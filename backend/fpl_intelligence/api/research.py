@@ -22,6 +22,7 @@ from fpl_intelligence.models import (
     ResearchDimensionAssessment,
     ResearchDeepRun,
     ResearchPlayerSynthesis,
+    ResearchCycle,
 )
 from fpl_intelligence.repositories.research_documents import ResearchDocumentRepository
 from fpl_intelligence.repositories.research_jobs import ResearchJobRepository
@@ -41,6 +42,7 @@ from fpl_intelligence.repositories.research_persistence import ResearchPersisten
 from fpl_intelligence.research.evidence import ResearchEvidenceService
 from fpl_intelligence.research.evidence_bundles import EvidenceBundleService
 from fpl_intelligence.research.deep_player import DeepPlayerResearchService
+from fpl_intelligence.research.orchestration import WeeklyResearchOrchestrator
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -502,9 +504,47 @@ class DeepRunCreateRequest(BaseModel):
     trigger_id: str | None = None
     target_dimensions: list[str] | None = None
 
+class ResearchCycleCreateRequest(BaseModel):
+    gameweek: int = Field(ge=1)
+    research_cutoff: datetime
+    max_deep_runs: int = Field(default=15, ge=1, le=15)
+
 
 def _deep_service(request: Request) -> DeepPlayerResearchService:
     return request.app.state.deep_player_research_service
+
+def _cycle_service(request: Request) -> WeeklyResearchOrchestrator: return request.app.state.weekly_research_orchestrator
+def _cycle_response(cycle: ResearchCycle) -> dict:
+    players=sorted(cycle.players,key=lambda x:(0 if x.selected_for_deep_research else 1 if x.state=="deferred" else 2,x.queue_rank or 999,x.player_id))
+    return {"id":cycle.id,"gameweek":cycle.gameweek,"research_cutoff":cycle.research_cutoff,"status":cycle.status,"max_deep_runs":cycle.max_deep_runs,"started_at":cycle.started_at,"prepared_at":cycle.prepared_at,"completed_at":cycle.completed_at,"failure_reason":cycle.failure_reason,"summary":{"active_watchlist_players":len(players),"monitored_players":sum(x.state=="monitored" for x in players),"triggered_players":sum(bool(x.triggers) for x in players),"selected_players":sum(x.selected_for_deep_research for x in players),"deferred_players":sum(x.state=="deferred" for x in players)},"players":[{"player_id":x.player_id,"state":x.state,"selected_for_deep_research":x.selected_for_deep_research,"queue_rank":x.queue_rank,"pulse_id":x.pulse_id,"failure_reason":x.failure_reason,"triggers":[{"id":t.id,"type":t.trigger_type,"source":t.source,"priority":t.priority,"description":t.description,"gameweek":t.gameweek,"status":t.status} for t in x.triggers],"deep_run":None if not x.deep_run else {"id":x.deep_run.id,"status":x.deep_run.status,"overall_research_state":x.deep_run.synthesis.overall_research_state if x.deep_run.synthesis else None}} for x in players]}
+
+@router.post("/cycles",status_code=status.HTTP_201_CREATED)
+def create_cycle(payload:ResearchCycleCreateRequest,request:Request,session:Session=Depends(get_session)): return _cycle_response(_cycle_service(request).create_cycle(session,**payload.model_dump()))
+@router.post("/cycles/{cycle_id}/prepare")
+def prepare_cycle(cycle_id:str,request:Request,session:Session=Depends(get_session)):
+    try:return _cycle_response(_cycle_service(request).prepare_cycle(session,cycle_id))
+    except (LookupError,ValueError) as exc: raise HTTPException(422,detail=str(exc))
+@router.post("/cycles/{cycle_id}/execute")
+def execute_cycle(cycle_id:str,request:Request,session:Session=Depends(get_session)):
+    try:return _cycle_response(_cycle_service(request).execute_cycle(session,cycle_id))
+    except (LookupError,ValueError) as exc: raise HTTPException(422,detail=str(exc))
+@router.post("/cycles/{cycle_id}/players/{player_id}/execute")
+def execute_cycle_player(cycle_id:str,player_id:int,request:Request,session:Session=Depends(get_session)):
+    try:return _cycle_response(_cycle_service(request).execute_selected_player(session,cycle_id,player_id))
+    except (LookupError,ValueError) as exc: raise HTTPException(422,detail=str(exc))
+@router.get("/cycles/{cycle_id}")
+def get_cycle(cycle_id:str,request:Request,session:Session=Depends(get_session)):
+    if cycle_id=="latest":
+        item=_cycle_service(request).get_latest_cycle(session)
+        if item is None: raise HTTPException(404,detail="ResearchCycle not found")
+        return _cycle_response(_cycle_service(request).get_cycle(session,item.id))
+    try:return _cycle_response(_cycle_service(request).get_cycle(session,cycle_id))
+    except LookupError as exc: raise HTTPException(404,detail=str(exc))
+@router.get("/cycles/latest")
+def latest_cycle(request:Request,session:Session=Depends(get_session)):
+    item=_cycle_service(request).get_latest_cycle(session);return _cycle_response(item) if item else None
+@router.get("/cycles")
+def list_cycles(request:Request,session:Session=Depends(get_session)): return [_cycle_response(_cycle_service(request).get_cycle(session,item.id)) for item in _cycle_service(request).list_cycles(session)]
 
 
 def _deep_run_response(run: ResearchDeepRun) -> dict:
