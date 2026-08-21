@@ -8,6 +8,17 @@ from dataclasses import dataclass
 
 EVAL2_SOURCE_DISCOVERY_PROMPT_VERSION = "eval2_source_discovery_v1"
 EVAL2_PAGE_RESEARCH_PROMPT_VERSION = "eval2_page_research_v1"
+EVAL2_EVIDENCE_BUNDLE_ASSESSMENT_PROMPT_VERSION = "eval2_evidence_bundle_assessment_v1"
+
+
+def evidence_bundle_assessment_prompt(*, context: dict):
+    return PromptEnvelope(version=EVAL2_EVIDENCE_BUNDLE_ASSESSMENT_PROMPT_VERSION, prompt=(
+        "Assess this atomic research evidence bundle; do not recommend an FPL action, buy, sell, captain, or rank a player. "
+        "Preserve contradictions, unknowns, provenance, cluster lineage, and superseded context. Derivative repetition is not independent confirmation. "
+        "Return exactly JSON keys bundle_strength, confidence, thesis, rationale, contradiction_summary, missing_information. "
+        "Allowed bundle_strength: strong, adequate, thin, unresolved. Allowed confidence: high, medium, low, unresolved. "
+        "One direct official source can be highly informative. Zero evidence can only be thin/low or unresolved/unresolved.\n"
+        f"Bundle context: {json.dumps(context, default=str, sort_keys=True)}"))
 EVAL2_ATOMIC_EXTRACTION_PROMPT_VERSION = "eval2_atomic_evidence_extraction_v1"
 EVAL2_REDDIT_RESEARCH_PROMPT_VERSION = "eval2_reddit_research_v1"
 EVAL2_COUNTER_SEARCH_PROMPT_VERSION = "eval2_counter_search_v1"

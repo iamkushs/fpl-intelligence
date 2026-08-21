@@ -16,10 +16,10 @@ from fpl_intelligence.integrations.fpl.snapshot import FPLSnapshotService
 from fpl_intelligence.research.two_stage import (
     CodexResearchExtractor,
     CodexSearchProvider,
-    HTTPPageRetriever,
     PlayerResolver,
     TwoStageResearchService,
 )
+from fpl_intelligence.research.web_retrieval import ScraplingPageRetriever
 from fpl_intelligence.research.source_discovery import (
     CodexEval2AtomicEvidenceProvider,
     CodexEval2DiscoveryProvider,
@@ -63,12 +63,12 @@ def create_app(
     )
     app.state.two_stage_research_service = two_stage_research_service or TwoStageResearchService(
         search_provider=CodexSearchProvider(app.state.codex_service),
-        retriever=HTTPPageRetriever(),
+        retriever=ScraplingPageRetriever(),
         extractor=CodexResearchExtractor(app.state.codex_service),
     )
     app.state.eval2_source_discovery_service = eval2_source_discovery_service or Eval2SourceDiscoveryService(
         discovery_provider=CodexEval2DiscoveryProvider(app.state.codex_service),
-        retriever=HTTPPageRetriever(),
+        retriever=ScraplingPageRetriever(),
         page_research_provider=CodexEval2PageResearchProvider(app.state.codex_service),
         atomic_provider=CodexEval2AtomicEvidenceProvider(app.state.codex_service),
     )
