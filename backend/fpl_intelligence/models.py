@@ -211,6 +211,11 @@ class ResearchQualityStatus:
     FAILED = "failed"
 
 
+class ResearchEvidenceBundleStatus:
+    DRAFT = "draft"
+    ASSESSED = "assessed"
+
+
 class Player(Base):
     """A durable reference to an official FPL player."""
 
@@ -800,6 +805,65 @@ class EvidenceRelation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     from_evidence: Mapped[ResearchEvidence] = relationship(foreign_keys=[from_evidence_id])
     to_evidence: Mapped[ResearchEvidence] = relationship(foreign_keys=[to_evidence_id])
+
+
+class ResearchEvidenceBundle(Base):
+    __tablename__ = "research_evidence_bundles"
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'assessed')", name="ck_research_evidence_bundles_status"),
+        Index("ix_research_evidence_bundles_player_dimension_cutoff", "player_id", "dimension", "research_cutoff"),
+        Index("ix_research_evidence_bundles_thread_situation", "thread_id", "situation_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="CASCADE"), nullable=False)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="SET NULL"), nullable=True)
+    dimension: Mapped[str] = mapped_column(String(64), nullable=False)
+    research_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=ResearchEvidenceBundleStatus.DRAFT)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    members: Mapped[list["ResearchEvidenceBundleMember"]] = relationship(back_populates="bundle", cascade="all, delete-orphan")
+    assessment: Mapped["ResearchDimensionAssessment | None"] = relationship(back_populates="bundle", cascade="all, delete-orphan", uselist=False)
+
+
+class ResearchEvidenceBundleMember(Base):
+    __tablename__ = "research_evidence_bundle_members"
+    __table_args__ = (UniqueConstraint("bundle_id", "evidence_id", name="uq_research_evidence_bundle_member"), CheckConstraint("role IN ('current', 'superseded', 'contextual')", name="ck_research_evidence_bundle_members_role"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    bundle_id: Mapped[str] = mapped_column(ForeignKey("research_evidence_bundles.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("research_evidence.id", ondelete="RESTRICT"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="current")
+    bundle: Mapped[ResearchEvidenceBundle] = relationship(back_populates="members")
+    evidence: Mapped[ResearchEvidence] = relationship()
+
+
+class ResearchDimensionAssessment(Base):
+    __tablename__ = "research_dimension_assessments"
+    __table_args__ = (CheckConstraint("bundle_strength IN ('strong', 'adequate', 'thin', 'unresolved')", name="ck_research_dimension_assessments_strength"), CheckConstraint("confidence IN ('high', 'medium', 'low', 'unresolved')", name="ck_research_dimension_assessments_confidence"), Index("ix_research_dimension_assessments_player_dimension_cutoff", "player_id", "dimension", "research_cutoff"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    bundle_id: Mapped[str] = mapped_column(ForeignKey("research_evidence_bundles.id", ondelete="CASCADE"), nullable=False, unique=True)
+    thread_id: Mapped[str] = mapped_column(ForeignKey("research_threads.id", ondelete="CASCADE"), nullable=False)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="SET NULL"), nullable=True)
+    dimension: Mapped[str] = mapped_column(String(64), nullable=False)
+    research_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    bundle_strength: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[str] = mapped_column(String(16), nullable=False)
+    thesis: Mapped[str] = mapped_column(Text, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    contradiction_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    missing_information: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    evidence_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    distinct_source_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    independent_source_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    contradiction_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    superseded_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    bundle: Mapped[ResearchEvidenceBundle] = relationship(back_populates="assessment")
 
 
 class ResearchRun(Base):

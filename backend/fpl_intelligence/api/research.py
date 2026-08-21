@@ -18,6 +18,8 @@ from fpl_intelligence.models import (
     ResearchEvidence,
     ResearchQualityStage,
     ResearchSourceCluster,
+    ResearchEvidenceBundle,
+    ResearchDimensionAssessment,
 )
 from fpl_intelligence.repositories.research_documents import ResearchDocumentRepository
 from fpl_intelligence.repositories.research_jobs import ResearchJobRepository
@@ -35,6 +37,7 @@ from fpl_intelligence.research.quality import ResearchQualityService, quality_ru
 from fpl_intelligence.research.quality_execution import Eval2QualityExecutionService
 from fpl_intelligence.repositories.research_persistence import ResearchPersistenceRepository
 from fpl_intelligence.research.evidence import ResearchEvidenceService
+from fpl_intelligence.research.evidence_bundles import EvidenceBundleService
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -479,6 +482,54 @@ class SourceClusterLinkRequest(BaseModel):
     research_link_id: str = Field(min_length=1)
     lineage_type: str = Field(min_length=1)
     notes: str | None = None
+
+
+class EvidenceBundleCreateRequest(BaseModel):
+    player_id: int
+    dimension: str = Field(min_length=1)
+    research_cutoff: datetime
+    situation_id: str | None = None
+    evidence_ids: list[str] | None = None
+
+
+def _bundle_response(bundle: ResearchEvidenceBundle, service: EvidenceBundleService, session: Session) -> dict:
+    metrics = service.metrics(session, bundle)
+    return {"id": bundle.id, "thread_id": bundle.thread_id, "player_id": bundle.player_id, "situation_id": bundle.situation_id, "dimension": bundle.dimension, "research_cutoff": bundle.research_cutoff, "status": bundle.status, "metrics": metrics, "members": [{"evidence_id": item.evidence_id, "role": item.role} for item in bundle.members]}
+
+
+def _assessment_response(item: ResearchDimensionAssessment) -> dict:
+    return {key: getattr(item, key) for key in ("id", "bundle_id", "thread_id", "player_id", "situation_id", "dimension", "research_cutoff", "bundle_strength", "confidence", "thesis", "rationale", "contradiction_summary", "missing_information", "evidence_count", "distinct_source_count", "independent_source_count", "contradiction_count", "superseded_count", "prompt_version")}
+
+
+@router.post("/threads/{thread_id}/evidence-bundles", status_code=status.HTTP_201_CREATED)
+def create_evidence_bundle(thread_id: str, payload: EvidenceBundleCreateRequest, session: Session = Depends(get_session)):
+    try:
+        bundle = EvidenceBundleService().build_dimension_bundle(session, thread_id=thread_id, **payload.model_dump())
+        return _bundle_response(bundle, EvidenceBundleService(), session)
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _evidence_error(exc)
+
+
+@router.get("/evidence-bundles/{bundle_id}")
+def get_evidence_bundle(bundle_id: str, session: Session = Depends(get_session)):
+    service = EvidenceBundleService()
+    try: return _bundle_response(service.get_bundle(session, bundle_id), service, session)
+    except LookupError as exc: _evidence_error(exc)
+
+
+@router.post("/evidence-bundles/{bundle_id}/assess")
+def assess_evidence_bundle(bundle_id: str, request: Request, session: Session = Depends(get_session)):
+    service = getattr(request.app.state, "evidence_bundle_service", EvidenceBundleService())
+    try:
+        bundle, assessment = service.assess_bundle(session, bundle_id)
+        return {"bundle": _bundle_response(bundle, service, session), "assessment": _assessment_response(assessment)}
+    except (LookupError, ValueError) as exc:
+        session.rollback(); _evidence_error(exc)
+
+
+@router.get("/players/{player_id}/dimension-assessments")
+def latest_dimension_assessments(player_id: int, session: Session = Depends(get_session)):
+    return [_assessment_response(item) for item in EvidenceBundleService().list_latest_dimension_assessments(session, player_id)]
 
 
 class EvidenceResponse(BaseModel):
