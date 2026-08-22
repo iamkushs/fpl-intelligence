@@ -319,6 +319,83 @@ class FPLManagerGameweekPick(Base):
     player: Mapped[Player] = relationship(back_populates="squad_picks")
 
 
+class DecisionSessionStatus:
+    DRAFT = "draft"
+    FINALIZED = "finalized"
+
+
+class DecisionOptionType:
+    HOLD = "hold"
+    TRANSFER = "transfer"
+
+
+class DecisionSession(Base):
+    """A user-owned, frozen planning surface; it never alters official FPL state."""
+
+    __tablename__ = "decision_sessions"
+    __table_args__ = (
+        UniqueConstraint("manager_id", "snapshot_id", name="uq_decision_session_manager_snapshot"),
+        CheckConstraint("status IN ('draft', 'finalized')", name="ck_decision_sessions_status"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    manager_id: Mapped[int] = mapped_column(ForeignKey("fpl_managers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("fpl_manager_gameweek_snapshots.id", ondelete="RESTRICT"), nullable=False, index=True)
+    gameweek: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    frozen_bank: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=DecisionSessionStatus.DRAFT)
+    selected_option_id: Mapped[str | None] = mapped_column(String(36))
+    finalized_option_id: Mapped[str | None] = mapped_column(String(36))
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    manager: Mapped[FPLManager] = relationship()
+    snapshot: Mapped[FPLManagerGameweekSnapshot] = relationship()
+    options: Mapped[list["DecisionOption"]] = relationship(back_populates="session", cascade="all, delete-orphan")
+    frozen_picks: Mapped[list["DecisionSessionPick"]] = relationship(back_populates="session", cascade="all, delete-orphan", order_by="DecisionSessionPick.squad_position")
+
+
+class DecisionSessionPick(Base):
+    __tablename__ = "decision_session_picks"
+    __table_args__ = (UniqueConstraint("session_id", "player_id", name="uq_decision_session_pick_player"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    squad_position: Mapped[int] = mapped_column(Integer, nullable=False)
+    selling_price: Mapped[int | None] = mapped_column(Integer)
+    session: Mapped[DecisionSession] = relationship(back_populates="frozen_picks")
+    player: Mapped[Player] = relationship()
+
+
+class DecisionOption(Base):
+    __tablename__ = "decision_options"
+    __table_args__ = (CheckConstraint("option_type IN ('hold', 'transfer')", name="ck_decision_options_type"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    session_id: Mapped[str] = mapped_column(ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    option_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    is_legal: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    validation_errors: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    budget_available: Mapped[int | None] = mapped_column(Integer)
+    budget_required: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    session: Mapped[DecisionSession] = relationship(back_populates="options")
+    movements: Mapped[list["DecisionMovement"]] = relationship(back_populates="option", cascade="all, delete-orphan", order_by="DecisionMovement.sequence")
+
+
+class DecisionMovement(Base):
+    __tablename__ = "decision_movements"
+    __table_args__ = (UniqueConstraint("option_id", "sequence", name="uq_decision_movement_sequence"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    option_id: Mapped[str] = mapped_column(ForeignKey("decision_options.id", ondelete="CASCADE"), nullable=False, index=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    outgoing_player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    incoming_player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    outgoing_synthesis_id: Mapped[str | None] = mapped_column(ForeignKey("research_player_syntheses.id", ondelete="RESTRICT"))
+    incoming_synthesis_id: Mapped[str | None] = mapped_column(ForeignKey("research_player_syntheses.id", ondelete="RESTRICT"))
+    option: Mapped[DecisionOption] = relationship(back_populates="movements")
+    outgoing_player: Mapped[Player] = relationship(foreign_keys=[outgoing_player_id])
+    incoming_player: Mapped[Player] = relationship(foreign_keys=[incoming_player_id])
+
+
 class ResearchSituation(Base):
     """Shared football/FPL context that can involve one or more canonical players."""
 

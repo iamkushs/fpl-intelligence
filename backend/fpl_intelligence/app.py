@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from fpl_intelligence.api.fpl import router as fpl_router
 from fpl_intelligence.api.pair_view import router as pair_view_router
+from fpl_intelligence.api.decisions import router as decisions_router
 from fpl_intelligence.api.research import router as research_router
 from fpl_intelligence.api.watchlist import router as watchlist_router
 from fpl_intelligence.api.triggers import router as triggers_router
@@ -98,6 +99,7 @@ def create_app(
     app.include_router(research_router)
     app.include_router(fpl_router)
     app.include_router(pair_view_router)
+    app.include_router(decisions_router)
     app.include_router(watchlist_router)
     app.include_router(triggers_router)
 
