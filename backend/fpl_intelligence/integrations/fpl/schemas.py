@@ -63,6 +63,10 @@ class FPLFixture(BaseModel):
     away_difficulty: int | None = None
     finished: bool = False
     started: bool = False
+    finished_provisional: bool | None = None
+    minutes: int | None = None
+    home_score: int | None = None
+    away_score: int | None = None
 
 
 class FPLPlayerGameweekStats(BaseModel):

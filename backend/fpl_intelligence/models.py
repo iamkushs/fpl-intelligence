@@ -319,6 +319,68 @@ class FPLManagerGameweekPick(Base):
     player: Mapped[Player] = relationship(back_populates="squad_picks")
 
 
+class FPLMatchCenterSnapshot(Base):
+    __tablename__ = "fpl_match_center_snapshots"
+    __table_args__ = (UniqueConstraint("gameweek", name="uq_fpl_match_center_snapshot_gameweek"), CheckConstraint("status IN ('available', 'partial', 'unavailable')", name="ck_fpl_match_center_snapshot_status"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    gameweek: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    fixtures: Mapped[list["FPLMatchCenterFixtureState"]] = relationship(back_populates="snapshot", cascade="all, delete-orphan")
+    players: Mapped[list["FPLMatchCenterPlayerState"]] = relationship(back_populates="snapshot", cascade="all, delete-orphan")
+    managers: Mapped[list["FPLMatchCenterManagerState"]] = relationship(back_populates="snapshot", cascade="all, delete-orphan")
+
+
+class FPLMatchCenterFixtureState(Base):
+    __tablename__ = "fpl_match_center_fixture_states"
+    __table_args__ = (UniqueConstraint("snapshot_id", "official_fixture_id", name="uq_fpl_match_center_fixture"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("fpl_match_center_snapshots.id", ondelete="CASCADE"), nullable=False, index=True)
+    official_fixture_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    home_team_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    away_team_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    kickoff_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    finished: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    finished_provisional: Mapped[bool | None] = mapped_column(Boolean)
+    fixture_minutes: Mapped[int | None] = mapped_column(Integer)
+    home_score: Mapped[int | None] = mapped_column(Integer)
+    away_score: Mapped[int | None] = mapped_column(Integer)
+    snapshot: Mapped[FPLMatchCenterSnapshot] = relationship(back_populates="fixtures")
+
+
+class FPLMatchCenterPlayerState(Base):
+    __tablename__ = "fpl_match_center_player_states"
+    __table_args__ = (UniqueConstraint("snapshot_id", "player_id", name="uq_fpl_match_center_player"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("fpl_match_center_snapshots.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False, index=True)
+    total_points: Mapped[int] = mapped_column(Integer, nullable=False)
+    minutes: Mapped[int | None] = mapped_column(Integer); goals_scored: Mapped[int | None] = mapped_column(Integer); assists: Mapped[int | None] = mapped_column(Integer); clean_sheets: Mapped[int | None] = mapped_column(Integer); goals_conceded: Mapped[int | None] = mapped_column(Integer); bonus: Mapped[int | None] = mapped_column(Integer); bps: Mapped[int | None] = mapped_column(Integer)
+    expected_goals: Mapped[float | None] = mapped_column(Float); expected_assists: Mapped[float | None] = mapped_column(Float); expected_goal_involvements: Mapped[float | None] = mapped_column(Float); expected_goals_conceded: Mapped[float | None] = mapped_column(Float)
+    raw_stats: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now()); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    snapshot: Mapped[FPLMatchCenterSnapshot] = relationship(back_populates="players")
+    player: Mapped[Player] = relationship()
+
+
+class FPLMatchCenterManagerState(Base):
+    __tablename__ = "fpl_match_center_manager_states"
+    __table_args__ = (UniqueConstraint("snapshot_id", "manager_id", name="uq_fpl_match_center_manager"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("fpl_match_center_snapshots.id", ondelete="CASCADE"), nullable=False, index=True)
+    manager_id: Mapped[int] = mapped_column(ForeignKey("fpl_managers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    squad_snapshot_id: Mapped[int] = mapped_column(ForeignKey("fpl_manager_gameweek_snapshots.id", ondelete="RESTRICT"), nullable=False)
+    official_event_points: Mapped[int | None] = mapped_column(Integer); provisional_live_points: Mapped[int | None] = mapped_column(Integer); active_chip: Mapped[str | None] = mapped_column(String(64)); automatic_subs: Mapped[list | None] = mapped_column(JSON)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now()); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    snapshot: Mapped[FPLMatchCenterSnapshot] = relationship(back_populates="managers")
+    manager: Mapped[FPLManager] = relationship(); squad_snapshot: Mapped[FPLManagerGameweekSnapshot] = relationship()
+
+
 class DecisionSessionStatus:
     DRAFT = "draft"
     FINALIZED = "finalized"

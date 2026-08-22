@@ -135,6 +135,7 @@ class OfficialFPLAdapter:
         return self._normalize_gameweek_live(payload["elements"])
 
     fetch_gameweek_live = get_gameweek_live
+    get_event_live = get_gameweek_live
 
     @staticmethod
     def _normalize_gameweek_live(payload: list[Any]) -> list[FPLPlayerGameweekStats]:
@@ -301,6 +302,10 @@ class OfficialFPLAdapter:
                     ),
                     finished=bool(item.get("finished", False)),
                     started=bool(item.get("started", False)),
+                    finished_provisional=(bool(item["finished_provisional"]) if item.get("finished_provisional") is not None else None),
+                    minutes=(_as_int(item["minutes"], field="minutes", context=context) if item.get("minutes") is not None else None),
+                    home_score=(_as_int(item["team_h_score"], field="team_h_score", context=context) if item.get("team_h_score") is not None else None),
+                    away_score=(_as_int(item["team_a_score"], field="team_a_score", context=context) if item.get("team_a_score") is not None else None),
                 )
             )
         return fixtures
