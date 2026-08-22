@@ -358,6 +358,8 @@ class FPLMatchCenterPlayerState(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     snapshot_id: Mapped[int] = mapped_column(ForeignKey("fpl_match_center_snapshots.id", ondelete="CASCADE"), nullable=False, index=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False, index=True)
+    club_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    position: Mapped[str | None] = mapped_column(String(8))
     total_points: Mapped[int] = mapped_column(Integer, nullable=False)
     minutes: Mapped[int | None] = mapped_column(Integer); goals_scored: Mapped[int | None] = mapped_column(Integer); assists: Mapped[int | None] = mapped_column(Integer); clean_sheets: Mapped[int | None] = mapped_column(Integer); goals_conceded: Mapped[int | None] = mapped_column(Integer); bonus: Mapped[int | None] = mapped_column(Integer); bps: Mapped[int | None] = mapped_column(Integer)
     expected_goals: Mapped[float | None] = mapped_column(Float); expected_assists: Mapped[float | None] = mapped_column(Float); expected_goal_involvements: Mapped[float | None] = mapped_column(Float); expected_goals_conceded: Mapped[float | None] = mapped_column(Float)

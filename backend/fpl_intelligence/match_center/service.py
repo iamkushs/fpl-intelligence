@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
-from fpl_intelligence.models import (FPLManagerPair, FPLManagerPairMember, FPLManagerGameweekSnapshot, FPLMatchCenterSnapshot, FPLMatchCenterFixtureState, FPLMatchCenterPlayerState, FPLMatchCenterManagerState, Player)
+from fpl_intelligence.models import (FPLManagerPair, FPLManagerPairMember, FPLManagerGameweekSnapshot, FPLMatchCenterSnapshot, FPLMatchCenterFixtureState, FPLMatchCenterPlayerState, FPLMatchCenterManagerState, Player, ResearchPlayerSynthesis)
 
 
 class MatchCenterConfigurationError(ValueError): pass
@@ -31,11 +31,14 @@ class MatchCenterService:
         session.flush()
         for f in fixtures:
             if f.id is not None: session.add(FPLMatchCenterFixtureState(snapshot_id=snapshot.id,official_fixture_id=f.id,home_team_id=f.home_club_id,away_team_id=f.away_club_id,kickoff_time=f.kickoff,started=f.started,finished=f.finished,finished_provisional=f.finished_provisional,fixture_minutes=f.minutes,home_score=f.home_score,away_score=f.away_score))
+        bootstrap=self.live_provider.get_bootstrap() if hasattr(self.live_provider,"get_bootstrap") else None
+        player_context={x.id:x for x in bootstrap.players} if bootstrap is not None else {}
         fields=("minutes","goals_scored","assists","clean_sheets","goals_conceded","bonus","bps","expected_goals","expected_assists","expected_goal_involvements","expected_goals_conceded")
         points={}
         for item in live:
             values={key:getattr(item,key) for key in fields}; points[item.player_id]=item.total_points or 0
-            session.add(FPLMatchCenterPlayerState(snapshot_id=snapshot.id,player_id=item.player_id,total_points=item.total_points or 0,raw_stats=item.model_dump(exclude={"player_id"}),**values))
+            context=player_context.get(item.player_id)
+            session.add(FPLMatchCenterPlayerState(snapshot_id=snapshot.id,player_id=item.player_id,club_id=context.club_id if context else None,position=context.position if context else None,total_points=item.total_points or 0,raw_stats=item.model_dump(exclude={"player_id"}),**values))
         session.flush(); failures=[]
         for pair in pairs.values():
             for member in pair.members:
@@ -72,7 +75,8 @@ class MatchCenterService:
                 if not state: continue
                 picks=state.squad_snapshot.picks
                 def pick(p):
-                    ps=points.get(p.player_id); return {"player":{"id":p.player_id,"display_name":f"Player {p.player_id}","href":f"/players/{p.player_id}"},"squad_position":p.squad_position,"starter":p.squad_position<=11,"captain":p.is_captain,"vice_captain":p.is_vice_captain,"multiplier":p.multiplier,"live_points":ps.total_points if ps else 0,"minutes":ps.minutes if ps else None,"fixture_state":"live_fixture" if any(f.started and not f.finished for f in snap.fixtures) else "fixture_finished" if snap.fixtures and all(f.finished for f in snap.fixtures) else "yet_to_play"}
+                    ps=points.get(p.player_id); fixture=self._fixture_context(ps,snap.fixtures); synthesis=session.scalar(select(ResearchPlayerSynthesis).where(ResearchPlayerSynthesis.player_id==p.player_id).order_by(ResearchPlayerSynthesis.research_cutoff.desc()))
+                    return {"player":{"id":p.player_id,"display_name":f"Player {p.player_id}","href":f"/players/{p.player_id}","intelligence":None if synthesis is None else {"id":synthesis.id,"overall_research_state":synthesis.overall_research_state,"research_cutoff":synthesis.research_cutoff}},"squad_position":p.squad_position,"starter":p.squad_position<=11,"captain":p.is_captain,"vice_captain":p.is_vice_captain,"multiplier":p.multiplier,"position":ps.position if ps else None,"live_points":ps.total_points if ps else 0,"minutes":ps.minutes if ps else None,"fixture":fixture,"fixture_state":fixture["state"] if fixture else "unresolved"}
                 rows=[pick(p) for p in picks]
                 for row in rows: uses.setdefault(row["player"]["id"],[]).append({"side":side,"manager_id":member.manager_id,"manager_slot":member.slot,"manager_name":member.manager.manager_name,"starter":row["starter"],"captain":row["captain"],"vice_captain":row["vice_captain"],"multiplier":row["multiplier"]})
                 managers.append({"id":member.manager_id,"entry_id":member.manager.entry_id,"slot":member.slot,"side":side,"manager_name":member.manager.manager_name,"team_name":member.manager.team_name,"provisional_live_points":state.provisional_live_points,"official_event_points":state.official_event_points,"active_chip":state.active_chip,"starting_xi":[x for x in rows if x["starter"]],"bench":[x for x in rows if not x["starter"]],"fixture_progress":{"starters_live_fixture":sum(x["fixture_state"]=="live_fixture" for x in rows if x["starter"]),"starters_fixture_finished":sum(x["fixture_state"]=="fixture_finished" for x in rows if x["starter"]),"starters_yet_to_play":sum(x["fixture_state"]=="yet_to_play" for x in rows if x["starter"])}})
@@ -87,10 +91,43 @@ class MatchCenterService:
     def calculate_captaincy(managers):
         rows=[]
         for m in managers:
-            cap=next((p for p in m["starting_xi"]+m["bench"] if p["captain"]),None); vice=next((p for p in m["starting_xi"]+m["bench"] if p["vice_captain"]),None); extra=(cap["live_points"]*max(cap["multiplier"]-1,0)) if cap else 0; rows.append({"manager_id":m["id"],"side":m["side"],"captain":cap,"vice_captain":vice,"captain_extra_contribution":extra})
+            cap=next((p for p in m["starting_xi"]+m["bench"] if p["captain"]),None); vice=next((p for p in m["starting_xi"]+m["bench"] if p["vice_captain"]),None); effective=cap; status="none"
+            if cap and cap["fixture_state"] in {"yet_to_play","live_fixture","unresolved"}: status="pending"
+            elif cap and cap["fixture_state"]=="fixture_finished" and (cap["minutes"] or 0)==0:
+                if vice and (vice["minutes"] or 0)>0: effective={**vice,"multiplier":cap["multiplier"]}; status="provisional"
+                else: status="pending"
+            extra=(effective["live_points"]*max(effective["multiplier"]-1,0)) if effective else 0; rows.append({"manager_id":m["id"],"side":m["side"],"captain":cap,"vice_captain":vice,"effective_captain":effective,"fallback_status":status,"captain_extra_contribution":extra})
         ours=sum(x["captain_extra_contribution"] for x in rows if x["side"]=="ours"); opp=sum(x["captain_extra_contribution"] for x in rows if x["side"]=="opponent"); return {"managers":rows,"our_captain_contribution":ours,"opponent_captain_contribution":opp,"captaincy_swing":ours-opp}
+    def calculate_autosub_watch(self,managers,snapshot):
+        result=[]
+        for manager in managers:
+            state=next(x for x in snapshot.managers if x.manager_id==manager["id"])
+            if state.automatic_subs:
+                result.append({"manager_id":manager["id"],"status":"confirmed","automatic_subs":state.automatic_subs,"items":[{"status":"confirmed","reason":"Official FPL automatic substitution"}]}); continue
+            starters=sorted(manager["starting_xi"],key=lambda x:x["squad_position"]); bench=sorted(manager["bench"],key=lambda x:x["squad_position"]); items=[]
+            pending=any(x["fixture_state"] in {"yet_to_play","live_fixture","unresolved"} and (x["minutes"] or 0)==0 for x in starters)
+            effective=[x for x in starters if not (x["fixture_state"]=="fixture_finished" and (x["minutes"] or 0)==0)]
+            for outgoing in starters:
+                if not (outgoing["fixture_state"]=="fixture_finished" and (outgoing["minutes"] or 0)==0): continue
+                candidates=[x for x in bench if x["position"]==outgoing["position"]] if outgoing["position"]=="GKP" else [x for x in bench if x["position"]!="GKP"]
+                incoming=next((x for x in candidates if self._legal_replacement(effective,outgoing,x)),None)
+                if incoming is None: items.append({"outgoing":outgoing["player"],"incoming":None,"status":"pending" if pending else "provisional","reason":"No eligible bench replacement in bench order"}); continue
+                effective.remove(outgoing); effective.append(incoming); bench.remove(incoming)
+                status="provisional" if incoming["fixture_state"]=="fixture_finished" else "pending"
+                items.append({"outgoing":outgoing["player"],"incoming":incoming["player"],"status":status,"reason":"Bench order and formation rules"})
+            result.append({"manager_id":manager["id"],"status":"pending" if pending and not items else ("provisional" if items else "pending"),"automatic_subs":[],"items":items})
+        return result
     @staticmethod
-    def calculate_autosub_watch(managers,snapshot):
-        return [{"manager_id":m["id"],"status":"confirmed" if next((x for x in snapshot.managers if x.manager_id==m["id"]),None).automatic_subs else "pending","automatic_subs":next((x for x in snapshot.managers if x.manager_id==m["id"]),None).automatic_subs or []} for m in managers]
+    def _legal_replacement(effective,outgoing,incoming):
+        trial=[x for x in effective if x is not outgoing]+[incoming]
+        positions=[x["position"] for x in trial]
+        return len(trial)<=11 and positions.count("GKP")==1 and positions.count("DEF")>=3 and positions.count("MID")>=2 and positions.count("FWD")>=1
+    @staticmethod
+    def _fixture_context(player_state,fixtures):
+        if player_state is None or player_state.club_id is None:return None
+        fixture=next((x for x in fixtures if player_state.club_id in (x.home_team_id,x.away_team_id)),None)
+        if fixture is None:return None
+        state="fixture_finished" if fixture.finished or fixture.finished_provisional else "live_fixture" if fixture.started else "yet_to_play"
+        return {"official_fixture_id":fixture.official_fixture_id,"opponent_team_id":fixture.away_team_id if player_state.club_id==fixture.home_team_id else fixture.home_team_id,"home_away":"home" if player_state.club_id==fixture.home_team_id else "away","kickoff_time":fixture.kickoff_time,"score":{"home":fixture.home_score,"away":fixture.away_score},"state":state}
     @staticmethod
     def _pairs(session): return {p.side:p for p in session.scalars(select(FPLManagerPair).options(selectinload(FPLManagerPair.members).selectinload(FPLManagerPairMember.manager))).all()}
