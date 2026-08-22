@@ -243,6 +243,80 @@ class Player(Base):
     research_evidence: Mapped[list["ResearchEvidence"]] = relationship(
         secondary=research_evidence_players, back_populates="players"
     )
+    squad_picks: Mapped[list["FPLManagerGameweekPick"]] = relationship(back_populates="player")
+
+
+class FPLManager(Base):
+    __tablename__ = "fpl_managers"
+    __table_args__ = (UniqueConstraint("entry_id", name="uq_fpl_managers_entry_id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entry_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    manager_name: Mapped[str | None] = mapped_column(String(255))
+    team_name: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    memberships: Mapped[list["FPLManagerPairMember"]] = relationship(back_populates="manager")
+    snapshots: Mapped[list["FPLManagerGameweekSnapshot"]] = relationship(back_populates="manager")
+
+
+class FPLManagerPair(Base):
+    __tablename__ = "fpl_manager_pairs"
+    __table_args__ = (CheckConstraint("side IN ('ours', 'opponent')", name="ck_fpl_manager_pairs_side"), UniqueConstraint("side", name="uq_fpl_manager_pairs_side"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    side: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    members: Mapped[list["FPLManagerPairMember"]] = relationship(back_populates="pair", cascade="all, delete-orphan", order_by="FPLManagerPairMember.slot")
+
+
+class FPLManagerPairMember(Base):
+    __tablename__ = "fpl_manager_pair_members"
+    __table_args__ = (CheckConstraint("slot IN (1, 2)", name="ck_fpl_manager_pair_members_slot"), UniqueConstraint("pair_id", "manager_id", name="uq_fpl_pair_member_manager"), UniqueConstraint("pair_id", "slot", name="uq_fpl_pair_member_slot"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pair_id: Mapped[int] = mapped_column(ForeignKey("fpl_manager_pairs.id", ondelete="CASCADE"), nullable=False, index=True)
+    manager_id: Mapped[int] = mapped_column(ForeignKey("fpl_managers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)
+    pair: Mapped[FPLManagerPair] = relationship(back_populates="members")
+    manager: Mapped[FPLManager] = relationship(back_populates="memberships")
+
+
+class FPLManagerGameweekSnapshot(Base):
+    __tablename__ = "fpl_manager_gameweek_snapshots"
+    __table_args__ = (UniqueConstraint("manager_id", "gameweek", name="uq_fpl_manager_gameweek_snapshot"), Index("ix_fpl_manager_snapshots_manager_gameweek", "manager_id", "gameweek"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    manager_id: Mapped[int] = mapped_column(ForeignKey("fpl_managers.id", ondelete="CASCADE"), nullable=False, index=True)
+    gameweek: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    event_points: Mapped[int | None] = mapped_column(Integer)
+    total_points: Mapped[int | None] = mapped_column(Integer)
+    overall_rank: Mapped[int | None] = mapped_column(Integer)
+    bank: Mapped[int | None] = mapped_column(Integer)
+    squad_value: Mapped[int | None] = mapped_column(Integer)
+    active_chip: Mapped[str | None] = mapped_column(String(64))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    manager: Mapped[FPLManager] = relationship(back_populates="snapshots")
+    picks: Mapped[list["FPLManagerGameweekPick"]] = relationship(back_populates="snapshot", cascade="all, delete-orphan", order_by="FPLManagerGameweekPick.squad_position")
+
+
+class FPLManagerGameweekPick(Base):
+    __tablename__ = "fpl_manager_gameweek_picks"
+    __table_args__ = (UniqueConstraint("snapshot_id", "squad_position", name="uq_fpl_snapshot_pick_position"), UniqueConstraint("snapshot_id", "player_id", name="uq_fpl_snapshot_pick_player"), Index("ix_fpl_manager_picks_player", "player_id"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("fpl_manager_gameweek_snapshots.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    squad_position: Mapped[int] = mapped_column(Integer, nullable=False)
+    multiplier: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_captain: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_vice_captain: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    purchase_price: Mapped[int | None] = mapped_column(Integer)
+    selling_price: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    snapshot: Mapped[FPLManagerGameweekSnapshot] = relationship(back_populates="picks")
+    player: Mapped[Player] = relationship(back_populates="squad_picks")
 
 
 class ResearchSituation(Base):
