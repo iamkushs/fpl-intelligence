@@ -13,8 +13,11 @@ class Database:
 
     def __init__(self, settings: Settings):
         url = settings.require_database_url()
-        connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-        self.engine = create_engine(url, future=True, pool_pre_ping=True, connect_args=connect_args)
+        connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {"connect_timeout": 10}
+        engine_kwargs = {"future": True, "pool_pre_ping": True, "connect_args": connect_args}
+        if not url.startswith("sqlite"):
+            engine_kwargs["pool_timeout"] = 10
+        self.engine = create_engine(url, **engine_kwargs)
         self.session_factory = sessionmaker(
             bind=self.engine,
             autoflush=False,

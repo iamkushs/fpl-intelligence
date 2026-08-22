@@ -91,7 +91,7 @@ export function PairViewPage() {
     });
   const fetchSafe = async (path: string, init?: RequestInit) => {
     const c = new AbortController();
-    const t = window.setTimeout(() => c.abort(), 4000);
+    const t = window.setTimeout(() => c.abort(), 15000);
     try {
       return await fetch(`${apiBase}${path}`, { ...init, signal: c.signal });
     } finally {
@@ -158,6 +158,10 @@ export function PairViewPage() {
       setConfigured(true);
       setMessage("Pairs configured. Sync a gameweek to populate the board.");
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setMessage("Request timed out. Check that the backend is running and reachable.");
+        return;
+      }
       setMessage(
         error instanceof Error
           ? `API error: ${error.message}`
