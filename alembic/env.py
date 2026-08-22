@@ -10,6 +10,10 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from fpl_intelligence.config import get_settings  # noqa: E402
 from fpl_intelligence.db.base import Base  # noqa: E402
+from fpl_intelligence.db.migration_version_table import (  # noqa: E402
+    configure_version_table,
+    ensure_postgresql_version_table_capacity,
+)
 from fpl_intelligence import models  # noqa: F401,E402
 
 config = context.config
@@ -19,6 +23,7 @@ if config.config_file_name is not None:
 database_url = get_settings().require_database_url()
 config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 target_metadata = Base.metadata
+configure_version_table()
 
 
 def run_migrations_offline() -> None:
@@ -40,6 +45,7 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        ensure_postgresql_version_table_capacity(connection, "alembic_version")
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
         with context.begin_transaction():
             context.run_migrations()
