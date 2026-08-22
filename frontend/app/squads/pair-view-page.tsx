@@ -2,8 +2,414 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
-type Pick = { player: { id:number; display_name:string }; squad_position:number; multiplier:number; captain:boolean; vice_captain:boolean };
-type Manager = { id:number; entry_id:number; manager_name?:string|null; team_name?:string|null; event_points?:number|null; total_points?:number|null; overall_rank?:number|null; active_chip?:string|null; starting_xi:Pick[]; bench:Pick[] };
-type View = { gameweek:number; our_pair:{name:string;managers:Manager[]}; opponent_pair:{name:string;managers:Manager[]}; exposure:any[]; overlap:any; captaincy:any };
-function Squad({ manager }:{manager:Manager}) { const picks=(items:Pick[]) => <div className="squad-picks">{items.map(p=><Link className="squad-pick" href={`/players/${p.player.id}`} key={p.squad_position}><span>{p.player.display_name}</span><small>{p.captain?"C":p.vice_captain?"VC":""}{p.multiplier!==1?` x${p.multiplier}`:""}</small></Link>)}</div>; return <article className="manager-card"><div className="card-top"><div><h3>{manager.team_name||manager.manager_name||`Entry ${manager.entry_id}`}</h3><p className="muted">{manager.manager_name||`Manager ${manager.entry_id}`}</p></div><strong>{manager.event_points??"—"} pts</strong></div><p className="manager-facts">Total {manager.total_points??"—"} · Rank {manager.overall_rank?.toLocaleString()??"—"}{manager.active_chip?` · ${manager.active_chip}`:""}</p><h4>Starting XI</h4>{picks(manager.starting_xi)}<h4>Bench</h4>{picks(manager.bench)}</article> }
-export function PairViewPage() { const [view,setView]=useState<View|null>(null),[configured,setConfigured]=useState<boolean|null>(null),[busy,setBusy]=useState(false),[message,setMessage]=useState(""),[filter,setFilter]=useState("all"),[gw,setGw]=useState(""),[form,setForm]=useState({ourName:"Our Pair",o1:"",o2:"",opName:"Opponent Pair",p1:"",p2:""}); const fetchSafe=async(path:string,init?:RequestInit)=>{const c=new AbortController();const t=window.setTimeout(()=>c.abort(),4000);try{return await fetch(`${apiBase}${path}`, {...init,signal:c.signal})}finally{window.clearTimeout(t)}};const load=async()=>{try{const r=await fetchSafe("/fpl/pair-view");if(r.ok){setView(await r.json());setConfigured(true)}else if(r.status===404){const c=await fetchSafe("/fpl/pair-view/config");const j=await c.json();setConfigured(Boolean(j.ours?.entry_ids?.length))}else throw new Error()}catch{setConfigured(false);setMessage("Pair View is temporarily unavailable.")}}; useEffect(()=>{load()},[]); async function configure(e:FormEvent){e.preventDefault();setBusy(true);try{const r=await fetchSafe("/fpl/pair-view/config",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({our_pair:{name:form.ourName,entry_ids:[Number(form.o1),Number(form.o2)]},opponent_pair:{name:form.opName,entry_ids:[Number(form.p1),Number(form.p2)]}})});if(!r.ok)throw new Error();setConfigured(true);setMessage("Pairs configured. Sync a gameweek to populate the board.")}catch{setMessage("Enter four distinct public FPL entry IDs and both pair names.")}finally{setBusy(false)}} async function sync(){if(!gw)return setMessage("Enter a gameweek to sync.");setBusy(true);try{const r=await fetchSafe("/fpl/pair-view/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({gameweek:Number(gw)})});if(!r.ok)throw new Error();const j=await r.json();setView(j.pair_view);const failed=j.results.filter((x:any)=>x.status==="failed");setMessage(failed.length?`${failed.length} manager sync failed; existing snapshots remain available.`:"Squads synced.")}catch{setMessage("Could not sync squad data. Existing snapshots were not changed.")}finally{setBusy(false)}} const exposure=useMemo(()=>view?.exposure.filter(x=>filter==="all"||x.exposure_state===filter)||[],[view,filter]); if(configured===null)return <main className="shell"><p>Loading Pair View…</p></main>; if(!configured)return <main className="shell squads-shell"><nav className="crumb"><Link href="/">FPL Intelligence</Link> / Squads</nav><p className="eyebrow">Competition state</p><h1>Pair View</h1><p className="muted">Set up the two public FPL manager IDs on each side. Names come from the official sync.</p><form className="pair-setup" onSubmit={configure}><fieldset><legend>Our Pair</legend><label>Pair name<input value={form.ourName} onChange={e=>setForm({...form,ourName:e.target.value})}/></label><label>Manager 1 entry ID<input required inputMode="numeric" value={form.o1} onChange={e=>setForm({...form,o1:e.target.value})}/></label><label>Manager 2 entry ID<input required inputMode="numeric" value={form.o2} onChange={e=>setForm({...form,o2:e.target.value})}/></label></fieldset><fieldset><legend>Opponent Pair</legend><label>Pair name<input value={form.opName} onChange={e=>setForm({...form,opName:e.target.value})}/></label><label>Manager 1 entry ID<input required inputMode="numeric" value={form.p1} onChange={e=>setForm({...form,p1:e.target.value})}/></label><label>Manager 2 entry ID<input required inputMode="numeric" value={form.p2} onChange={e=>setForm({...form,p2:e.target.value})}/></label></fieldset><button disabled={busy}>Configure pairs</button></form>{message&&<p className="action-message">{message}</p>}</main>; return <main className="shell squads-shell"><nav className="crumb"><Link href="/">FPL Intelligence</Link> / Squads</nav><header className="pair-header"><div><p className="eyebrow">Gameweek matchup board</p><h1>Pair View</h1><p className="muted">Durable squad state — no transfer or captain recommendations.</p></div><div className="sync-controls"><label>Gameweek<input inputMode="numeric" value={gw||String(view?.gameweek||"")} onChange={e=>setGw(e.target.value)}/></label><button onClick={sync} disabled={busy}>{busy?"Syncing…":"Sync squads"}</button></div></header>{message&&<p className="action-message">{message}</p>}{!view?<section className="empty"><h2>Ready to sync</h2><p>Choose a gameweek and explicitly fetch the configured public squads.</p></section>:<><section className="pair-board"><div><p className="eyebrow">Our Pair</p><h2>{view.our_pair.name}</h2>{view.our_pair.managers.map(m=><Squad manager={m} key={m.id}/>)}</div><div><p className="eyebrow">Opponent Pair</p><h2>{view.opponent_pair.name}</h2>{view.opponent_pair.managers.map(m=><Squad manager={m} key={m.id}/>)}</div></section><section><p className="eyebrow">Ownership map</p><h2>Exposure Board</h2><div className="exposure-filters">{[["all","All exposure"],["ours_only","Ours only"],["opponent_only","Opponent only"],["shared","Shared"]].map(([id,label])=><button className={filter===id?"":"quiet-button"} key={id} onClick={()=>setFilter(id)}>{label}</button>)}</div><div className="exposure-list">{exposure.map(item=><Link href={`/players/${item.player.id}`} className="exposure-row" key={item.player.id}><strong>{item.player.display_name}</strong><span>{item.exposure_state.replace("_"," ")}</span><small>Us {item.our_owner_count} · Them {item.opponent_owner_count}</small></Link>)}</div></section><section className="pair-summary"><div><p className="eyebrow">Captaincy</p><h2>Four captain choices</h2>{["ours","opponent"].map(side=><div key={side}><h3>{side==="ours"?view.our_pair.name:view.opponent_pair.name}</h3>{view.captaincy[side].map((x:any)=><p key={x.entry_id}>{x.captain?.player.display_name||"No captain stored"} {x.captain?.multiplier>1?`x${x.captain.multiplier}`:""}</p>)}</div>)}</div><div><p className="eyebrow">Pair overlap</p><h2>Internal selections</h2>{["ours","opponent"].map(side=><p key={side}>{side==="ours"?view.our_pair.name:view.opponent_pair.name}: <strong>{view.overlap[side].shared_player_count} shared</strong> · {view.overlap[side].unique_player_count} unique</p>)}</div></section></>}</main> }
+type Pick = {
+  player: { id: number; display_name: string };
+  squad_position: number;
+  multiplier: number;
+  captain: boolean;
+  vice_captain: boolean;
+};
+type Manager = {
+  id: number;
+  entry_id: number;
+  manager_name?: string | null;
+  team_name?: string | null;
+  event_points?: number | null;
+  total_points?: number | null;
+  overall_rank?: number | null;
+  active_chip?: string | null;
+  starting_xi: Pick[];
+  bench: Pick[];
+};
+type View = {
+  gameweek: number;
+  our_pair: { name: string; managers: Manager[] };
+  opponent_pair: { name: string; managers: Manager[] };
+  exposure: any[];
+  overlap: any;
+  captaincy: any;
+};
+function Squad({ manager }: { manager: Manager }) {
+  const picks = (items: Pick[]) => (
+    <div className="squad-picks">
+      {items.map((p) => (
+        <Link
+          className="squad-pick"
+          href={`/players/${p.player.id}`}
+          key={p.squad_position}
+        >
+          <span>{p.player.display_name}</span>
+          <small>
+            {p.captain ? "C" : p.vice_captain ? "VC" : ""}
+            {p.multiplier !== 1 ? ` x${p.multiplier}` : ""}
+          </small>
+        </Link>
+      ))}
+    </div>
+  );
+  return (
+    <article className="manager-card">
+      <div className="card-top">
+        <div>
+          <h3>
+            {manager.team_name ||
+              manager.manager_name ||
+              `Entry ${manager.entry_id}`}
+          </h3>
+          <p className="muted">
+            {manager.manager_name || `Manager ${manager.entry_id}`}
+          </p>
+        </div>
+        <strong>{manager.event_points ?? "—"} pts</strong>
+      </div>
+      <p className="manager-facts">
+        Total {manager.total_points ?? "—"} · Rank{" "}
+        {manager.overall_rank?.toLocaleString() ?? "—"}
+        {manager.active_chip ? ` · ${manager.active_chip}` : ""}
+      </p>
+      <h4>Starting XI</h4>
+      {picks(manager.starting_xi)}
+      <h4>Bench</h4>
+      {picks(manager.bench)}
+    </article>
+  );
+}
+export function PairViewPage() {
+  const [view, setView] = useState<View | null>(null),
+    [configured, setConfigured] = useState<boolean | null>(null),
+    [busy, setBusy] = useState(false),
+    [message, setMessage] = useState(""),
+    [filter, setFilter] = useState("all"),
+    [gw, setGw] = useState(""),
+    [form, setForm] = useState({
+      ourName: "Our Pair",
+      o1: "",
+      o2: "",
+      opName: "Opponent Pair",
+      p1: "",
+      p2: "",
+    });
+  const fetchSafe = async (path: string, init?: RequestInit) => {
+    const c = new AbortController();
+    const t = window.setTimeout(() => c.abort(), 4000);
+    try {
+      return await fetch(`${apiBase}${path}`, { ...init, signal: c.signal });
+    } finally {
+      window.clearTimeout(t);
+    }
+  };
+  const load = async () => {
+    try {
+      const r = await fetchSafe("/fpl/pair-view");
+      if (r.ok) {
+        setView(await r.json());
+        setConfigured(true);
+      } else if (r.status === 404) {
+        const c = await fetchSafe("/fpl/pair-view/config");
+        const j = await c.json();
+        setConfigured(Boolean(j.ours?.entry_ids?.length));
+      } else throw new Error();
+    } catch {
+      setConfigured(false);
+      setMessage("Pair View is temporarily unavailable.");
+    }
+  };
+  useEffect(() => {
+    load();
+  }, []);
+  async function configure(e: FormEvent) {
+    e.preventDefault();
+    const names = [form.ourName.trim(), form.opName.trim()];
+    const ids = [form.o1, form.o2, form.p1, form.p2].map((value) =>
+      Number(value.trim()),
+    );
+    if (
+      names.some((name) => !name) ||
+      ids.some((id) => !Number.isInteger(id) || id <= 0) ||
+      new Set(ids).size !== 4
+    ) {
+      setMessage("Enter four distinct positive FPL entry IDs and both pair names.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await fetchSafe("/fpl/pair-view/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          our_pair: {
+            name: names[0],
+            entry_ids: ids.slice(0, 2),
+          },
+          opponent_pair: {
+            name: names[1],
+            entry_ids: ids.slice(2),
+          },
+        }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => null);
+        throw new Error(
+          typeof body?.detail === "string"
+            ? body.detail
+            : "The pair configuration could not be saved.",
+        );
+      }
+      setConfigured(true);
+      setMessage("Pairs configured. Sync a gameweek to populate the board.");
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? `API error: ${error.message}`
+          : "API error: The pair configuration request failed.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function sync() {
+    if (!gw) return setMessage("Enter a gameweek to sync.");
+    setBusy(true);
+    try {
+      const r = await fetchSafe("/fpl/pair-view/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gameweek: Number(gw) }),
+      });
+      if (!r.ok) throw new Error();
+      const j = await r.json();
+      setView(j.pair_view);
+      const failed = j.results.filter((x: any) => x.status === "failed");
+      setMessage(
+        failed.length
+          ? `${failed.length} manager sync failed; existing snapshots remain available.`
+          : "Squads synced.",
+      );
+    } catch {
+      setMessage(
+        "Could not sync squad data. Existing snapshots were not changed.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  const exposure = useMemo(
+    () =>
+      view?.exposure.filter(
+        (x) => filter === "all" || x.exposure_state === filter,
+      ) || [],
+    [view, filter],
+  );
+  if (configured === null)
+    return (
+      <main className="shell">
+        <p>Loading Pair View…</p>
+      </main>
+    );
+  if (!configured)
+    return (
+      <main className="shell squads-shell">
+        <nav className="crumb">
+          <Link href="/">FPL Intelligence</Link> / Squads
+        </nav>
+        <p className="eyebrow">Competition state</p>
+        <h1>Pair View</h1>
+        <p className="muted">
+          Set up the two public FPL manager IDs on each side. Names come from
+          the official sync.
+        </p>
+        <form className="pair-setup" onSubmit={configure}>
+          <fieldset>
+            <legend>Our Pair</legend>
+            <label>
+              Pair name
+              <input
+                value={form.ourName}
+                onChange={(e) => setForm({ ...form, ourName: e.target.value })}
+              />
+            </label>
+            <label>
+              Manager 1 entry ID
+              <input
+                required
+                inputMode="numeric"
+                value={form.o1}
+                onChange={(e) => setForm({ ...form, o1: e.target.value })}
+              />
+            </label>
+            <label>
+              Manager 2 entry ID
+              <input
+                required
+                inputMode="numeric"
+                value={form.o2}
+                onChange={(e) => setForm({ ...form, o2: e.target.value })}
+              />
+            </label>
+          </fieldset>
+          <fieldset>
+            <legend>Opponent Pair</legend>
+            <label>
+              Pair name
+              <input
+                value={form.opName}
+                onChange={(e) => setForm({ ...form, opName: e.target.value })}
+              />
+            </label>
+            <label>
+              Manager 1 entry ID
+              <input
+                required
+                inputMode="numeric"
+                value={form.p1}
+                onChange={(e) => setForm({ ...form, p1: e.target.value })}
+              />
+            </label>
+            <label>
+              Manager 2 entry ID
+              <input
+                required
+                inputMode="numeric"
+                value={form.p2}
+                onChange={(e) => setForm({ ...form, p2: e.target.value })}
+              />
+            </label>
+      </fieldset>
+      <button disabled={busy}>Configure pairs</button>
+      <p className="muted">Use four distinct positive public FPL entry IDs.</p>
+    </form>
+        {message && <p className="action-message">{message}</p>}
+      </main>
+    );
+  return (
+    <main className="shell squads-shell">
+      <nav className="crumb">
+        <Link href="/">FPL Intelligence</Link> / Squads
+      </nav>
+      <header className="pair-header">
+        <div>
+          <p className="eyebrow">Gameweek matchup board</p>
+          <h1>Pair View</h1>
+          <p className="muted">
+            Durable squad state — no transfer or captain recommendations.
+          </p>
+        </div>
+        <div className="sync-controls">
+          <label>
+            Gameweek
+            <input
+              inputMode="numeric"
+              value={gw || String(view?.gameweek || "")}
+              onChange={(e) => setGw(e.target.value)}
+            />
+          </label>
+          <button onClick={sync} disabled={busy}>
+            {busy ? "Syncing…" : "Sync squads"}
+          </button>
+        </div>
+      </header>
+      {message && <p className="action-message">{message}</p>}
+      {!view ? (
+        <section className="empty">
+          <h2>Ready to sync</h2>
+          <p>
+            Choose a gameweek and explicitly fetch the configured public squads.
+          </p>
+        </section>
+      ) : (
+        <>
+          <section className="pair-board">
+            <div>
+              <p className="eyebrow">Our Pair</p>
+              <h2>{view.our_pair.name}</h2>
+              {view.our_pair.managers.map((m) => (
+                <Squad manager={m} key={m.id} />
+              ))}
+            </div>
+            <div>
+              <p className="eyebrow">Opponent Pair</p>
+              <h2>{view.opponent_pair.name}</h2>
+              {view.opponent_pair.managers.map((m) => (
+                <Squad manager={m} key={m.id} />
+              ))}
+            </div>
+          </section>
+          <section>
+            <p className="eyebrow">Ownership map</p>
+            <h2>Exposure Board</h2>
+            <div className="exposure-filters">
+              {[
+                ["all", "All exposure"],
+                ["ours_only", "Ours only"],
+                ["opponent_only", "Opponent only"],
+                ["shared", "Shared"],
+              ].map(([id, label]) => (
+                <button
+                  className={filter === id ? "" : "quiet-button"}
+                  key={id}
+                  onClick={() => setFilter(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="exposure-list">
+              {exposure.map((item) => (
+                <Link
+                  href={`/players/${item.player.id}`}
+                  className="exposure-row"
+                  key={item.player.id}
+                >
+                  <strong>{item.player.display_name}</strong>
+                  <span>{item.exposure_state.replace("_", " ")}</span>
+                  <small>
+                    Us {item.our_owner_count} · Them {item.opponent_owner_count}
+                  </small>
+                </Link>
+              ))}
+            </div>
+          </section>
+          <section className="pair-summary">
+            <div>
+              <p className="eyebrow">Captaincy</p>
+              <h2>Four captain choices</h2>
+              {["ours", "opponent"].map((side) => (
+                <div key={side}>
+                  <h3>
+                    {side === "ours"
+                      ? view.our_pair.name
+                      : view.opponent_pair.name}
+                  </h3>
+                  {view.captaincy[side].map((x: any) => (
+                    <p key={x.entry_id}>
+                      {x.captain?.player.display_name || "No captain stored"}{" "}
+                      {x.captain?.multiplier > 1
+                        ? `x${x.captain.multiplier}`
+                        : ""}
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div>
+              <p className="eyebrow">Pair overlap</p>
+              <h2>Internal selections</h2>
+              {["ours", "opponent"].map((side) => (
+                <p key={side}>
+                  {side === "ours"
+                    ? view.our_pair.name
+                    : view.opponent_pair.name}
+                  :{" "}
+                  <strong>
+                    {view.overlap[side].shared_player_count} shared
+                  </strong>{" "}
+                  · {view.overlap[side].unique_player_count} unique
+                </p>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+    </main>
+  );
+}
