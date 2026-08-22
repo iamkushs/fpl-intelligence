@@ -5,8 +5,11 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 import sqlalchemy as sa
+from sqlalchemy.orm import sessionmaker
 
 from fpl_intelligence.db import migration_version_table
+from fpl_intelligence.integrations.fpl.bootstrap import FPLBootstrapSyncService
+from fpl_intelligence.integrations.fpl.schemas import FPLBootstrap, FPLClub, FPLGameweek, FPLPlayer
 
 
 def test_all_revision_ids_fit_project_version_table_capacity():
@@ -82,5 +85,24 @@ def test_empty_sqlite_database_upgrades_to_head(tmp_path, monkeypatch):
             assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == (
                 "0020_canonical_fpl_bootstrap"
             )
+            inspector = sa.inspect(connection)
+            assert {"fpl_clubs", "fpl_gameweeks", "players"} <= set(inspector.get_table_names())
+            assert "club_id" in {column["name"] for column in inspector.get_columns("players")}
+            assert "ix_players_club_id" in {index["name"] for index in inspector.get_indexes("players")}
+
+        class Adapter:
+            def get_bootstrap(self):
+                return FPLBootstrap(
+                    clubs=[FPLClub(id=1, name="Example FC", short_name="EXA")],
+                    gameweeks=[FPLGameweek(number=1, name="Gameweek 1", is_next=True)],
+                    players=[FPLPlayer(id=10, first_name="Alex", second_name="Example", display_name="A Example", club_id=1, club_name="Example FC", club_short_name="EXA", position="DEF", price=4.5, ownership_percent=12.3, availability_status="a")],
+                )
+
+        session = sessionmaker(bind=engine)()
+        service = FPLBootstrapSyncService(Adapter())
+        assert service.sync(session).players == 1
+        assert service.sync(session).players == 1
+        assert session.execute(sa.text("SELECT count(*) FROM fpl_clubs")).scalar_one() == 1
+        session.close()
     finally:
         engine.dispose()

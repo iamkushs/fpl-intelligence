@@ -23,7 +23,7 @@ def upgrade() -> None:
         sa.Column("research_thread_id", sa.String(36), nullable=True),
         sa.Column("description", sa.Text(), nullable=False),
         sa.Column("category", sa.String(32), nullable=False),
-        sa.Column("active", sa.Boolean(), server_default="1", nullable=False),
+        sa.Column("active", sa.Boolean(), server_default=sa.true(), nullable=False),
         sa.Column("condition", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("satisfied_at", sa.DateTime(timezone=True), nullable=True),

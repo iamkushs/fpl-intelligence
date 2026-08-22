@@ -51,7 +51,7 @@ def upgrade() -> None:
         sa.Column("season", sa.String(64), nullable=True),
         sa.Column("reliability", sa.String(16), nullable=False),
         sa.Column("relevance", sa.String(16), nullable=False),
-        sa.Column("is_volatile", sa.Boolean(), server_default="0", nullable=False),
+        sa.Column("is_volatile", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column("source_cluster_id", sa.String(36), nullable=True),
         sa.Column("notes", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),

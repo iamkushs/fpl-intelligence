@@ -17,7 +17,10 @@ def sync_fpl_bootstrap() -> None:
                 base_url=settings.official_fpl_base_url,
                 timeout_seconds=settings.official_fpl_timeout_seconds,
             )).sync(session)
-        print(f"Canonical FPL bootstrap synced: clubs={result.clubs} gameweeks={result.gameweeks} players={result.players}")
+        print("sync completed")
+        print(f"clubs: {result.clubs}")
+        print(f"gameweeks: {result.gameweeks}")
+        print(f"players: {result.players}")
     finally:
         database.engine.dispose()
 
@@ -27,7 +30,10 @@ def main() -> None:
     parser.add_argument("command", choices=["sync-fpl-bootstrap"])
     args = parser.parse_args()
     if args.command == "sync-fpl-bootstrap":
-        sync_fpl_bootstrap()
+        try:
+            sync_fpl_bootstrap()
+        except Exception as exc:
+            parser.exit(1, f"FPL bootstrap sync failed: {exc}\n")
 
 
 if __name__ == "__main__":

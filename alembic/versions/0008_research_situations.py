@@ -48,7 +48,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(36), nullable=False),
         sa.Column("situation_id", sa.String(36), nullable=False),
         sa.Column("statement", sa.Text(), nullable=False),
-        sa.Column("active", sa.Boolean(), server_default="1", nullable=False),
+        sa.Column("active", sa.Boolean(), server_default=sa.true(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(["situation_id"], ["research_situations.id"], ondelete="CASCADE"),
