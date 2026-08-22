@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from fpl_intelligence.api.fpl import router as fpl_router
 from fpl_intelligence.api.pair_view import router as pair_view_router
@@ -57,6 +58,13 @@ def create_app(
 ) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(title="FPL Intelligence System", version="0.1.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list(),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.logger = logger
     app.state.settings = settings
     app.state.database = database

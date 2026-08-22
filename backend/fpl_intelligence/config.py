@@ -10,6 +10,13 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def normalize_database_url(value: str) -> str:
+    """Use the installed psycopg v3 dialect for standard PostgreSQL URLs."""
+    if value.startswith("postgresql://"):
+        return "postgresql+psycopg://" + value.removeprefix("postgresql://")
+    return value
+
+
 class Settings(BaseSettings):
     """Runtime settings loaded from environment variables and ``.env``."""
 
@@ -56,11 +63,18 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="OFFICIAL_FPL_SEASON_ID",
     )
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000",
+        validation_alias="CORS_ORIGINS",
+    )
 
     def require_database_url(self) -> str:
         if not self.database_url:
             raise RuntimeError("DATABASE_URL is required for database-backed operations")
-        return self.database_url
+        return normalize_database_url(self.database_url)
+
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 @lru_cache(maxsize=1)

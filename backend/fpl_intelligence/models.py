@@ -226,6 +226,16 @@ class Player(Base):
     __tablename__ = "players"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    first_name: Mapped[str | None] = mapped_column(String(255))
+    second_name: Mapped[str | None] = mapped_column(String(255))
+    display_name: Mapped[str | None] = mapped_column(String(255))
+    club_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    position: Mapped[str | None] = mapped_column(String(8))
+    price: Mapped[float | None] = mapped_column(Float)
+    ownership_percent: Mapped[float | None] = mapped_column(Float)
+    availability_status: Mapped[str | None] = mapped_column(String(32))
+    chance_of_playing_next_round: Mapped[int | None] = mapped_column(Integer)
+    news: Mapped[str | None] = mapped_column(Text)
     research_links: Mapped[list["ResearchLink"]] = relationship(
         secondary=research_link_players, back_populates="players"
     )
@@ -244,6 +254,26 @@ class Player(Base):
         secondary=research_evidence_players, back_populates="players"
     )
     squad_picks: Mapped[list["FPLManagerGameweekPick"]] = relationship(back_populates="player")
+
+
+class FPLClub(Base):
+    __tablename__ = "fpl_clubs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    short_name: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class FPLGameweek(Base):
+    __tablename__ = "fpl_gameweeks"
+
+    number: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_next: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_previous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class FPLManager(Base):
