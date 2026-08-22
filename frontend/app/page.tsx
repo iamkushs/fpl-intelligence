@@ -7,6 +7,7 @@ export default function Home() {
       <h1>Player research</h1>
       <p className="muted">Open a player at /players/&lt;official FPL player ID&gt;.</p>
       <p><Link className="home-link" href="/decisions">Open Decision Center</Link></p>
+      <p><Link className="home-link" href="/match-center">Open Match Center →</Link></p>
       <p><Link className="home-link" href="/watchlist">Open Watchlist →</Link></p>
     </main>
   );
