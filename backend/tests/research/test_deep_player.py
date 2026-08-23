@@ -26,3 +26,16 @@ def test_blind_spots_and_synthesis_are_durable_and_monitoring_is_idempotent(db):
     session,thread=db; item=DeepPlayerResearchService(source_service=object(),quality_execution=object(),player_resolver=PlayerResolver([]),bundle_service=EvidenceBundleService(),blind_spot_provider=Blind(),synthesis_provider=Synthesis())
     run=item.create_run(session,thread_id=thread.id,player_id=1,research_cutoff=datetime.now(timezone.utc)); item.run_blind_spot_pass(session,run.id); one=item.synthesize(session,run.id); two=item.synthesize(session,run.id)
     assert one.synthesis.id==two.synthesis.id and one.blind_spots[0].status=="unresolved"
+
+
+def test_full_run_marks_deep_run_failed_when_a_stage_raises(db):
+    session, thread = db
+    item = service()
+    run = item.create_run(session, thread_id=thread.id, player_id=1, research_cutoff=datetime.now(timezone.utc))
+    item.execute_research = lambda *_: (_ for _ in ()).throw(ValueError("provider unavailable"))
+
+    with pytest.raises(ValueError, match="provider unavailable"):
+        item.execute_full_run(session, run.id)
+
+    persisted = item.get_run(session, run.id)
+    assert persisted.status == "failed" and persisted.failure_reason == "provider unavailable"

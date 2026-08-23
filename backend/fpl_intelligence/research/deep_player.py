@@ -106,7 +106,18 @@ class DeepPlayerResearchService:
         if run.synthesis:
             for k,v in data.items(): setattr(synthesis,k,v)
         session.add(synthesis); self._monitor(session,run,data["future_monitoring"]); run.status=ResearchDeepRunStatus.COMPLETED; run.completed_at=datetime.now(timezone.utc); session.commit(); return self.get_run(session,run.id)
-    def execute_full_run(self,session,run_id): self.execute_research(session,run_id); self.run_blind_spot_pass(session,run_id); return self.synthesize(session,run_id)
+    def execute_full_run(self,session,run_id):
+        try:
+            self.execute_research(session,run_id)
+            self.run_blind_spot_pass(session,run_id)
+            return self.synthesize(session,run_id)
+        except Exception as exc:
+            run=self.get_run(session,run_id)
+            run.status=ResearchDeepRunStatus.FAILED
+            run.failure_reason=str(exc)[:500]
+            run.completed_at=datetime.now(timezone.utc)
+            session.commit()
+            raise
     def get_latest_synthesis(self,session,player_id): return session.scalar(select(ResearchPlayerSynthesis).where(ResearchPlayerSynthesis.player_id==player_id).order_by(ResearchPlayerSynthesis.research_cutoff.desc(),ResearchPlayerSynthesis.updated_at.desc()))
     def _latest_assessments(self,session,run):
         items=list(session.scalars(select(ResearchDimensionAssessment).join(research_deep_run_assessments).where(research_deep_run_assessments.c.deep_run_id==run.id).order_by(ResearchDimensionAssessment.dimension,ResearchDimensionAssessment.updated_at.desc()))) ; result={}
