@@ -170,3 +170,14 @@ def test_production_prompt_envelopes_include_structured_contracts():
     ]
 
     assert all(envelope.structured_output_contract for envelope in envelopes)
+
+
+def test_atomic_prompt_exposes_canonical_claim_type_vocabulary():
+    from fpl_intelligence.research.eval2_prompts import atomic_extraction_prompt
+
+    prompt = atomic_extraction_prompt(
+        player_payload={"id": 4}, result_payload={}, research_cutoff=cutoff().isoformat()
+    ).prompt
+
+    assert "Allowed claim types only" in prompt
+    assert "starting_status" in prompt and "fixture_context" in prompt

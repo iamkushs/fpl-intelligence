@@ -199,6 +199,12 @@ def atomic_extraction_prompt(
     trigger_payload: dict | None = None,
     durable_context: dict | None = None,
 ) -> PromptEnvelope:
+    claim_types = [
+        "minutes", "starting_status", "expected_xi", "tactical_role", "position", "formation", "penalties", "corners",
+        "direct_free_kicks", "indirect_free_kicks", "availability", "injury", "suspension", "transfer", "competition",
+        "manager_intent", "performance", "underlying_stats", "fixture_context", "team_attack", "team_defence",
+        "goalkeeper_hierarchy", "price", "ownership", "other",
+    ]
     contract = {
         "evidence": [
             {
@@ -243,6 +249,7 @@ def atomic_extraction_prompt(
             "Good: Player A started at left wing against Team B. Good: Player A took the first penalty. Good: Manager said Player A is fully fit.",
             "Bad: Player A started on the left, took penalties, looked dangerous and is probably nailed.",
             "Distinguish evidence_type from claim_type. Do not expose model inference as sourced fact.",
+            f"Allowed claim types only: {', '.join(claim_types)}.",
             "Allowed evidence types: fact, statistic, report, supporter_observation, speculation, inference.",
             "Preserve contradictions and supersession history; do not collapse disagreement into one best claim.",
             "Create evidence relationships only when explicit in the extracted material or durable context; do not automatically label newer claims as superseding older claims.",
