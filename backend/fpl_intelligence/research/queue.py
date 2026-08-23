@@ -60,6 +60,24 @@ class ResearchQueueService:
                 item.cycle_id=cycle.id; item.cycle_player_id=cp.id; item.deep_run_id=cp.deep_run_id
                 item.status=ResearchQueueStatus.COMPLETED if cp.state==ResearchCyclePlayerState.RESEARCHED else ResearchQueueStatus.FAILED
                 session.commit()
-            except Exception:
-                item.status=ResearchQueueStatus.FAILED; session.commit()
+            except Exception as exc:
+                # The queue is the durable owner of this lifecycle.  Preserve
+                # the attempted links even when orchestration fails before it
+                # can create a deep run, and never leave an executable item
+                # looking selected/running without a reason.
+                cp=session.scalar(select(ResearchCyclePlayer).where(ResearchCyclePlayer.cycle_id==cycle.id,ResearchCyclePlayer.player_id==item.player_id))
+                item.cycle_id=cycle.id
+                item.cycle_player_id=cp.id if cp else None
+                item.deep_run_id=cp.deep_run_id if cp else None
+                if cp and cp.state != ResearchCyclePlayerState.RESEARCHED:
+                    cp.state=ResearchCyclePlayerState.FAILED
+                    cp.failure_reason=str(exc)[:500]
+                item.status=ResearchQueueStatus.FAILED
+                cycle.status=ResearchCycleStatus.PARTIAL
+                cycle.completed_at=datetime.now(timezone.utc)
+                session.commit()
+        if items and cycle.status not in {ResearchCycleStatus.PARTIAL, ResearchCycleStatus.FAILED}:
+            cycle.status=ResearchCycleStatus.COMPLETED
+            cycle.completed_at=datetime.now(timezone.utc)
+            session.commit()
         return items
