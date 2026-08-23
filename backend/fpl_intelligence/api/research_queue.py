@@ -2,9 +2,10 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from fpl_intelligence.api.research import get_session
-from fpl_intelligence.models import ResearchQueueItem, PlayerResearchTrigger, MonitoringTrigger, ResearchTriggerStatus
+from fpl_intelligence.models import (ResearchQueueItem, PlayerResearchTrigger, MonitoringTrigger, ResearchTriggerStatus,
+    WatchlistEntry, PlayerGameweekPulse, ResearchDeepRun, ResearchPlayerSynthesis, ResearchCycle, ResearchCyclePlayer, Player)
 from fpl_intelligence.research.queue import ResearchQueueService
 
 router=APIRouter(prefix="/fpl",tags=["research-center"]); service=ResearchQueueService()
@@ -40,7 +41,21 @@ def research_center(session:Session=Depends(get_session)):
     monitors=list(session.scalars(select(MonitoringTrigger).where(MonitoringTrigger.active.is_(True)).order_by(MonitoringTrigger.created_at.desc()).limit(100)))
     signals=[{"id":t.id,"player_id":t.player_id,"signal_type":t.trigger_type,"reason":t.description,"gameweek":t.gameweek,"source":t.source,"priority":t.priority,"created_at":t.created_at,"already_queued":t.player_id in active_ids,"trigger_id":t.id} for t in triggers]
     signals += [{"id":m.id,"player_id":m.player_id,"signal_type":m.category,"reason":m.description,"context":m.condition,"gameweek":None,"source":"monitoring","priority":None,"created_at":m.created_at,"already_queued":m.player_id in active_ids,"monitoring_trigger_id":m.id} for m in monitors]
-    return {"queue":[out(x) for x in items if x.status in {"queued","running"}],"snoozed":[out(x) for x in items if x.status=="snoozed"],"recent_research":[out(x) for x in history if x.status in {"completed","failed"}],"attention_signals":signals,"watchlist_monitoring":[],"recent_cycles":[]}
+    watch_ids=list(session.scalars(select(WatchlistEntry.player_id).where(WatchlistEntry.active.is_(True))))
+    pulses=list(session.scalars(select(PlayerGameweekPulse).options(selectinload(PlayerGameweekPulse.player)).where(PlayerGameweekPulse.player_id.in_(watch_ids)).order_by(PlayerGameweekPulse.player_id,PlayerGameweekPulse.gameweek.desc()))) if watch_ids else []
+    monitoring=[]
+    for player_id in watch_ids:
+        rows=[p for p in pulses if p.player_id==player_id][:5]
+        if rows:
+            player=rows[0].player
+            monitoring.append({"player_id":player_id,"player_name":player.display_name,"price":player.price,"availability":player.availability_status,"ownership_percent":player.ownership_percent,"pulses":[{"gameweek":p.gameweek,"minutes":p.minutes,"starts":p.starts,"total_points":p.total_points,"goals":p.goals_scored,"assists":p.assists,"clean_sheets":p.clean_sheets,"bonus":p.bonus,"xG":p.expected_goals,"xA":p.expected_assists,"xGI":p.expected_goal_involvements,"xGC":p.expected_goals_conceded} for p in rows]})
+    synth=list(session.scalars(select(ResearchPlayerSynthesis).options(selectinload(ResearchPlayerSynthesis.deep_run)).order_by(ResearchPlayerSynthesis.created_at.desc()).limit(20)))
+    recent=[{"id":s.id,"player_id":s.player_id,"player_name":(session.get(PlayerGameweekPulse,s.player_id).player.display_name if False else None),"completed_at":s.created_at,"overall_research_state":s.overall_research_state,"research_cutoff":s.research_cutoff,"deep_run_id":s.deep_run_id} for s in synth]
+    player_names={p.id:p.display_name for p in session.scalars(select(Player).where(Player.id.in_([s.player_id for s in synth])))} if synth else {}
+    for x in recent: x["player_name"]=player_names.get(x["player_id"])
+    cycles=list(session.scalars(select(ResearchCycle).options(selectinload(ResearchCycle.players)).order_by(ResearchCycle.created_at.desc()).limit(10)))
+    runs=[{"id":c.id,"gameweek":c.gameweek,"status":c.status,"started_at":c.started_at,"completed_at":c.completed_at,"player_count":len(c.players),"completed_count":sum(p.state=="researched" for p in c.players),"failed_count":sum(p.state=="failed" for p in c.players),"running_count":sum(p.state in {"researching","selected"} for p in c.players)} for c in cycles]
+    return {"queue":[out(x) for x in items if x.status in {"queued","running"}],"snoozed":[out(x) for x in items if x.status=="snoozed"],"recent_research":recent,"attention_signals":signals,"watchlist_monitoring":monitoring,"recent_cycles":runs}
 
 @router.post("/research-signals/{signal_id}/queue")
 def queue_signal(signal_id:str,session:Session=Depends(get_session)):
