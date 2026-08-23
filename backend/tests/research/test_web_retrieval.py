@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from fpl_intelligence.research.web_retrieval import PageRetrievalError, ScraplingPageRetriever
@@ -44,3 +46,12 @@ def test_unsafe_url_is_rejected_without_fetch(url):
     with pytest.raises(PageRetrievalError, match="invalid_url"):
         ScraplingPageRetriever(static_client=static).retrieve_page(url)
     assert static.calls == 0
+
+
+def test_static_client_is_bounded_even_when_it_ignores_timeout():
+    class HangingStatic:
+        async def get(self, url, **kwargs):
+            await asyncio.sleep(1)
+
+    with pytest.raises(PageRetrievalError, match="timeout"):
+        ScraplingPageRetriever(static_client=HangingStatic(), timeout_seconds=0.01).retrieve_page("https://example.com/a")

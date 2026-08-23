@@ -67,7 +67,10 @@ class ScraplingPageRetriever:
     def retrieve_page(self, url: str) -> RetrievedPage:
         _validate_url(url)
         try:
-            response = asyncio.run(self.static_client.get(url, follow_redirects="safe", timeout=self.timeout_seconds))
+            response = asyncio.run(asyncio.wait_for(
+                self.static_client.get(url, follow_redirects="safe", timeout=self.timeout_seconds),
+                timeout=self.timeout_seconds,
+            ))
         except PageRetrievalError:
             raise
         except TimeoutError as exc:
