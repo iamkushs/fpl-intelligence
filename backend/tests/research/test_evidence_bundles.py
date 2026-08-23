@@ -23,6 +23,11 @@ def test_supersession_and_assessment_idempotency(session):
     db,thread=session; old=evidence(db,thread); new=evidence(db,thread); db.add(EvidenceRelation(from_evidence_id=new.id,to_evidence_id=old.id,relation_type=EvidenceRelationshipType.SUPERSEDES)); db.commit()
     service=EvidenceBundleService(Provider()); bundle=service.build_dimension_bundle(db,thread_id=thread.id,player_id=1,dimension="minutes",research_cutoff=datetime.now(timezone.utc)); assert {m.role for m in bundle.members}=={"current","superseded"}
     _,one=service.assess_bundle(db,bundle.id); _,two=service.assess_bundle(db,bundle.id); assert one.id==two.id
-def test_zero_evidence_cannot_be_strong(session):
-    db,thread=session; bundle=EvidenceBundleService(Provider("strong","high")).build_dimension_bundle(db,thread_id=thread.id,player_id=1,dimension="minutes",research_cutoff=datetime.now(timezone.utc))
-    with pytest.raises(ValueError,match="Zero-evidence"): EvidenceBundleService(Provider("strong","high")).assess_bundle(db,bundle.id)
+def test_zero_evidence_bundle_is_assessed_deterministically_without_provider(session):
+    db,thread=session
+    bundle=EvidenceBundleService().build_dimension_bundle(db,thread_id=thread.id,player_id=1,dimension="minutes",research_cutoff=datetime.now(timezone.utc))
+
+    _, assessment=EvidenceBundleService().assess_bundle(db,bundle.id)
+
+    assert (assessment.bundle_strength, assessment.confidence)==("unresolved","unresolved")
+    assert assessment.missing_information==["Current, source-backed evidence for this dimension."]

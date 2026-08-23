@@ -49,10 +49,14 @@ class EvidenceBundleService:
         independent += len({link for link in links if not any(item.evidence.source_cluster_id for item in members if item.evidence.research_link_id == link)})
         return {"evidence_count":len(members), "distinct_source_count":len(links), "independent_source_count":independent, "contradiction_count":len({relation.id for relation in relations if relation.relation_type == EvidenceRelationshipType.CONTRADICTS}), "superseded_count":sum(item.role == "superseded" for item in members)}
     def assess_bundle(self, session, bundle_id):
-        if self.provider is None: raise ValueError("Evidence bundle assessment provider is required")
         bundle=self.get_bundle(session,bundle_id); metrics=self.metrics(session,bundle)
         context={"player_id":bundle.player_id,"thread_id":bundle.thread_id,"situation_id":bundle.situation_id,"dimension":bundle.dimension,"research_cutoff":bundle.research_cutoff.isoformat(),"metrics":metrics,"evidence":[{"id":m.evidence_id,"claim":m.evidence.claim,"role":m.role,"type":m.evidence.evidence_type,"reliability":m.evidence.reliability,"relevance":m.evidence.relevance,"published_at":str(m.evidence.published_at),"source_url":m.evidence.research_link.original_url if m.evidence.research_link else None} for m in bundle.members]}
-        payload=self.provider.assess(context=context,prompt_version=EVAL2_EVIDENCE_BUNDLE_ASSESSMENT_PROMPT_VERSION); self._validate(payload, metrics)
+        if metrics["evidence_count"] == 0:
+            payload={"bundle_strength":"unresolved","confidence":"unresolved","thesis":"No eligible evidence was collected for this dimension.","rationale":"The bundle contains no atomic evidence to assess.","contradiction_summary":None,"missing_information":["Current, source-backed evidence for this dimension."]}
+        else:
+            if self.provider is None: raise ValueError("Evidence bundle assessment provider is required")
+            payload=self.provider.assess(context=context,prompt_version=EVAL2_EVIDENCE_BUNDLE_ASSESSMENT_PROMPT_VERSION)
+        self._validate(payload, metrics)
         assessment=bundle.assessment or ResearchDimensionAssessment(bundle_id=bundle.id,thread_id=bundle.thread_id,player_id=bundle.player_id,situation_id=bundle.situation_id,dimension=bundle.dimension,research_cutoff=bundle.research_cutoff,prompt_version=EVAL2_EVIDENCE_BUNDLE_ASSESSMENT_PROMPT_VERSION,**metrics)
         for key in ("bundle_strength","confidence","thesis","rationale","contradiction_summary","missing_information"): setattr(assessment,key,payload.get(key))
         assessment.evidence_count=metrics["evidence_count"]; assessment.distinct_source_count=metrics["distinct_source_count"]; assessment.independent_source_count=metrics["independent_source_count"]; assessment.contradiction_count=metrics["contradiction_count"]; assessment.superseded_count=metrics["superseded_count"]
