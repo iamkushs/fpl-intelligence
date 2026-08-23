@@ -4,9 +4,11 @@ from fpl_intelligence.models import (
     Player,
     ResearchCycle,
     ResearchCyclePlayer,
+    ResearchDeepRun,
     ResearchQueueItem,
     ResearchQueueSource,
 )
+from fpl_intelligence.research.orchestration import WeeklyResearchOrchestrator
 from fpl_intelligence.research.queue import ResearchQueueService
 
 
@@ -62,3 +64,58 @@ def test_queue_failure_is_linked_and_durable(database):
         assert cycle_player.failure_reason == "provider unavailable"
         assert cycle.status == "partial"
         assert cycle.completed_at is not None
+
+
+class BoundaryDeepService:
+    def __init__(self, database):
+        self.database = database
+        self.run_id = None
+
+    def create_run(self, session, *, thread_id, player_id, research_cutoff, **_kwargs):
+        # This fresh session mirrors the database visibility required by the
+        # orchestration boundary, after its real selected-player guard passed.
+        with self.database.session_factory() as separate_session:
+            cycle_player = separate_session.query(ResearchCyclePlayer).filter_by(player_id=player_id).one()
+            assert cycle_player.state == "selected"
+            assert cycle_player.selected_for_deep_research is True
+        run = ResearchDeepRun(
+            thread_id=thread_id,
+            player_id=player_id,
+            research_cutoff=research_cutoff,
+            target_dimensions=["availability"],
+            orchestration_version="boundary-test",
+        )
+        session.add(run)
+        session.commit()
+        self.run_id = run.id
+        return run
+
+    def execute_full_run(self, session, run_id):
+        return session.get(ResearchDeepRun, run_id)
+
+
+def test_queue_crosses_selected_player_guard_and_creates_deep_run(database):
+    with database.session_factory() as session:
+        session.add(Player(id=4, display_name="Gabriel"))
+        session.commit()
+        queue = ResearchQueueService()
+        item = queue.add_player(session, player_id=4, source=ResearchQueueSource.USER)
+        deep_service = BoundaryDeepService(database)
+        orchestrator = WeeklyResearchOrchestrator(deep_service=deep_service)
+
+        queue.run(
+            session,
+            orchestrator=orchestrator,
+            deep_service=deep_service,
+            gameweek=1,
+            research_cutoff=datetime.now(timezone.utc),
+            limit=1,
+            item_ids=[item.id],
+        )
+
+        persisted = session.get(ResearchQueueItem, item.id)
+        cycle_player = session.get(ResearchCyclePlayer, persisted.cycle_player_id)
+        assert persisted.status == "completed"
+        assert cycle_player.state == "researched"
+        assert persisted.deep_run_id == deep_service.run_id
+        assert session.get(ResearchDeepRun, deep_service.run_id) is not None

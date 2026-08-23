@@ -57,6 +57,10 @@ class ResearchQueueService:
             item.deep_run_id=cp.deep_run_id
             session.commit()
             cp=session.get(ResearchCyclePlayer,cp.id)
+            # prepare_cycle() loaded this relationship before an explicit
+            # queue item was appended by foreign key.  Expire it so the
+            # orchestrator's selected-player guard sees the committed row.
+            session.expire(cycle, ["players"])
             try:
                 orchestrator.execute_selected_player(session,cycle.id,item.player_id,queue_context={"reason":item.reason,"source":item.source,"source_context":item.source_context,"research_situation_id":item.research_situation_id,"trigger_id":item.trigger_id})
                 cp=session.scalar(select(ResearchCyclePlayer).where(ResearchCyclePlayer.cycle_id==cycle.id,ResearchCyclePlayer.player_id==item.player_id))
