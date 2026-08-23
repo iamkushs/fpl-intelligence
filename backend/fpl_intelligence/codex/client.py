@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -140,6 +142,11 @@ class CodexAppServerClient:
         command = shlex.split(self.settings.codex_app_server_command, posix=False)
         if not command:
             raise CodexAppServerError("CODEX_APP_SERVER_COMMAND is empty")
+        if os.name == "nt":
+            # PowerShell can resolve `codex` through a .ps1 shim, but
+            # CreateProcess cannot.  Resolve the executable wrapper (.CMD)
+            # before starting the stdio server.
+            command[0] = shutil.which(command[0]) or command[0]
 
         rpc = self.process_factory(command, self.settings.codex_working_directory)
         try:

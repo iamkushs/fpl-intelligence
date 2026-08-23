@@ -2,6 +2,7 @@ from queue import Queue
 
 import pytest
 
+import fpl_intelligence.codex.client as client_module
 from fpl_intelligence.codex.client import (
     CodexAppServerClient,
     CodexAppServerError,
@@ -14,6 +15,7 @@ class FakeRpc:
     instances = []
 
     def __init__(self, command, cwd):
+        self.command = command
         self.messages = Queue()
         self.sent = []
         self.closed = False
@@ -59,6 +61,19 @@ def test_app_server_client_executes_thread_and_turn():
     ]
     assert FakeRpc.instances[0].sent[-1]["params"]["effort"] == "medium"
     assert FakeRpc.instances[0].closed
+
+
+def test_app_server_client_resolves_windows_command_wrapper(monkeypatch):
+    FakeRpc.instances.clear()
+    monkeypatch.setattr(client_module.os, "name", "nt")
+    monkeypatch.setattr(client_module.shutil, "which", lambda command: r"C:\\tools\\codex.CMD")
+    client = CodexAppServerClient(
+        settings=Settings(database_url="sqlite://", codex_timeout_seconds=2), process_factory=FakeRpc
+    )
+
+    client.execute("bounded question", CodexExecutionConfig())
+
+    assert FakeRpc.instances[0].command[0] == r"C:\\tools\\codex.CMD"
 
 
 class ErrorRpc(FakeRpc):
