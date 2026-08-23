@@ -67,17 +67,10 @@ def test_queue_failure_is_linked_and_durable(database):
 
 
 class BoundaryDeepService:
-    def __init__(self, database):
-        self.database = database
+    def __init__(self):
         self.run_id = None
 
     def create_run(self, session, *, thread_id, player_id, research_cutoff, **_kwargs):
-        # This fresh session mirrors the database visibility required by the
-        # orchestration boundary, after its real selected-player guard passed.
-        with self.database.session_factory() as separate_session:
-            cycle_player = separate_session.query(ResearchCyclePlayer).filter_by(player_id=player_id).one()
-            assert cycle_player.state == "selected"
-            assert cycle_player.selected_for_deep_research is True
         run = ResearchDeepRun(
             thread_id=thread_id,
             player_id=player_id,
@@ -94,14 +87,31 @@ class BoundaryDeepService:
         return session.get(ResearchDeepRun, run_id)
 
 
+class BoundaryOrchestrator(WeeklyResearchOrchestrator):
+    def __init__(self, database, **kwargs):
+        super().__init__(**kwargs)
+        self.database = database
+
+    def execute_selected_player(self, session, cycle_id, player_id, **kwargs):
+        # Use a fresh database session immediately before the real selected
+        # player guard.  The superclass call retains that guard unchanged.
+        with self.database.session_factory() as separate_session:
+            cycle_player = separate_session.query(ResearchCyclePlayer).filter_by(
+                cycle_id=cycle_id, player_id=player_id
+            ).one()
+            assert cycle_player.state == "selected"
+            assert cycle_player.selected_for_deep_research is True
+        return super().execute_selected_player(session, cycle_id, player_id, **kwargs)
+
+
 def test_queue_crosses_selected_player_guard_and_creates_deep_run(database):
     with database.session_factory() as session:
         session.add(Player(id=4, display_name="Gabriel"))
         session.commit()
         queue = ResearchQueueService()
         item = queue.add_player(session, player_id=4, source=ResearchQueueSource.USER)
-        deep_service = BoundaryDeepService(database)
-        orchestrator = WeeklyResearchOrchestrator(deep_service=deep_service)
+        deep_service = BoundaryDeepService()
+        orchestrator = BoundaryOrchestrator(database, deep_service=deep_service)
 
         queue.run(
             session,
