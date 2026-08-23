@@ -11,6 +11,9 @@ from fpl_intelligence.research.queue import ResearchQueueService
 
 
 class FailingOrchestrator:
+    def __init__(self, queue_item_id):
+        self.queue_item_id = queue_item_id
+
     def create_cycle(self, session, *, gameweek, research_cutoff, max_deep_runs):
         cycle = ResearchCycle(
             gameweek=gameweek,
@@ -25,7 +28,10 @@ class FailingOrchestrator:
     def prepare_cycle(self, session, cycle_id):
         return session.get(ResearchCycle, cycle_id)
 
-    def execute_selected_player(self, *_args, **_kwargs):
+    def execute_selected_player(self, session, *_args, **_kwargs):
+        queue_item = session.get(ResearchQueueItem, self.queue_item_id)
+        assert queue_item.cycle_id is not None
+        assert queue_item.cycle_player_id is not None
         raise RuntimeError("provider unavailable")
 
 
@@ -39,7 +45,7 @@ def test_queue_failure_is_linked_and_durable(database):
 
         ResearchQueueService().run(
             session,
-            orchestrator=FailingOrchestrator(),
+            orchestrator=FailingOrchestrator(item.id),
             deep_service=None,
             gameweek=1,
             research_cutoff=datetime.now(timezone.utc),

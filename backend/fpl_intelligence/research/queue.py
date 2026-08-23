@@ -53,6 +53,9 @@ class ResearchQueueService:
                 session.add(cp); session.flush()
             else:
                 cp.state=ResearchCyclePlayerState.SELECTED; cp.selected_for_deep_research=True; cp.queue_rank=item.queue_order
+            item.cycle_id=cycle.id
+            item.cycle_player_id=cp.id
+            item.deep_run_id=cp.deep_run_id
             session.commit()
             try:
                 orchestrator.execute_selected_player(session,cycle.id,item.player_id,queue_context={"reason":item.reason,"source":item.source,"source_context":item.source_context,"research_situation_id":item.research_situation_id,"trigger_id":item.trigger_id})
