@@ -69,13 +69,18 @@ class MatchCenterService:
         snap=session.scalar(select(FPLMatchCenterSnapshot).where(FPLMatchCenterSnapshot.gameweek==gameweek).options(selectinload(FPLMatchCenterSnapshot.fixtures),selectinload(FPLMatchCenterSnapshot.players),selectinload(FPLMatchCenterSnapshot.managers).selectinload(FPLMatchCenterManagerState.squad_snapshot).selectinload(FPLManagerGameweekSnapshot.picks),selectinload(FPLMatchCenterSnapshot.managers).selectinload(FPLMatchCenterManagerState.manager)))
         if snap is None:return None
         pairs=self._pairs(session); points={x.player_id:x for x in snap.players}; uses={}; managers=[]
+        player_ids={pick.player_id for state in snap.managers for pick in state.squad_snapshot.picks}
+        syntheses={}
+        if player_ids:
+            for synthesis in session.scalars(select(ResearchPlayerSynthesis).where(ResearchPlayerSynthesis.player_id.in_(player_ids)).order_by(ResearchPlayerSynthesis.player_id,ResearchPlayerSynthesis.research_cutoff.desc(),ResearchPlayerSynthesis.id.desc())):
+                syntheses.setdefault(synthesis.player_id,synthesis)
         for side,pair in pairs.items():
             for member in pair.members:
                 state=next((x for x in snap.managers if x.manager_id==member.manager_id),None)
                 if not state: continue
                 picks=state.squad_snapshot.picks
                 def pick(p):
-                    ps=points.get(p.player_id); fixture=self._fixture_context(ps,snap.fixtures); synthesis=session.scalar(select(ResearchPlayerSynthesis).where(ResearchPlayerSynthesis.player_id==p.player_id).order_by(ResearchPlayerSynthesis.research_cutoff.desc()))
+                    ps=points.get(p.player_id); fixture=self._fixture_context(ps,snap.fixtures); synthesis=syntheses.get(p.player_id)
                     return {"player":{"id":p.player_id,"display_name":f"Player {p.player_id}","href":f"/players/{p.player_id}","intelligence":None if synthesis is None else {"id":synthesis.id,"overall_research_state":synthesis.overall_research_state,"research_cutoff":synthesis.research_cutoff}},"squad_position":p.squad_position,"starter":p.squad_position<=11,"captain":p.is_captain,"vice_captain":p.is_vice_captain,"multiplier":p.multiplier,"position":ps.position if ps else None,"live_points":ps.total_points if ps else 0,"minutes":ps.minutes if ps else None,"fixture":fixture,"fixture_state":fixture["state"] if fixture else "unresolved"}
                 rows=[pick(p) for p in picks]
                 for row in rows: uses.setdefault(row["player"]["id"],[]).append({"side":side,"manager_id":member.manager_id,"manager_slot":member.slot,"manager_name":member.manager.manager_name,"starter":row["starter"],"captain":row["captain"],"vice_captain":row["vice_captain"],"multiplier":row["multiplier"]})
