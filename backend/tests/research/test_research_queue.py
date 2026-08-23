@@ -32,6 +32,7 @@ class FailingOrchestrator:
         queue_item = session.get(ResearchQueueItem, self.queue_item_id)
         assert queue_item.cycle_id is not None
         assert queue_item.cycle_player_id is not None
+        assert session.get(ResearchCyclePlayer, queue_item.cycle_player_id).selected_for_deep_research
         raise RuntimeError("provider unavailable")
 
 

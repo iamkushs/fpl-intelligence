@@ -1,6 +1,6 @@
 """Explicit queue operations. Trigger generation does not call this service."""
 from datetime import datetime, timezone
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, selectinload
 from fpl_intelligence.models import Player, ResearchQueueItem, ResearchQueueSource, ResearchQueueStatus, ResearchCyclePlayer, ResearchCyclePlayerState, ResearchCycleStatus
 
@@ -51,12 +51,12 @@ class ResearchQueueService:
             if cp is None:
                 cp=ResearchCyclePlayer(cycle_id=cycle.id,player_id=item.player_id,state=ResearchCyclePlayerState.SELECTED,selected_for_deep_research=True,queue_rank=item.queue_order)
                 session.add(cp); session.flush()
-            else:
-                cp.state=ResearchCyclePlayerState.SELECTED; cp.selected_for_deep_research=True; cp.queue_rank=item.queue_order
+            session.execute(update(ResearchCyclePlayer).where(ResearchCyclePlayer.id==cp.id).values(state=ResearchCyclePlayerState.SELECTED,selected_for_deep_research=True,queue_rank=item.queue_order))
             item.cycle_id=cycle.id
             item.cycle_player_id=cp.id
             item.deep_run_id=cp.deep_run_id
             session.commit()
+            cp=session.get(ResearchCyclePlayer,cp.id)
             try:
                 orchestrator.execute_selected_player(session,cycle.id,item.player_id,queue_context={"reason":item.reason,"source":item.source,"source_context":item.source_context,"research_situation_id":item.research_situation_id,"trigger_id":item.trigger_id})
                 cp=session.scalar(select(ResearchCyclePlayer).where(ResearchCyclePlayer.cycle_id==cycle.id,ResearchCyclePlayer.player_id==item.player_id))
