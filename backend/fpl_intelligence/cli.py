@@ -6,6 +6,7 @@ from fpl_intelligence.config import get_settings
 from fpl_intelligence.db.session import Database
 from fpl_intelligence.integrations.fpl.adapter import OfficialFPLAdapter
 from fpl_intelligence.integrations.fpl.bootstrap import FPLBootstrapSyncService
+from fpl_intelligence.briefing.service import GameweekBriefingService
 
 
 def sync_fpl_bootstrap() -> None:
@@ -24,16 +25,28 @@ def sync_fpl_bootstrap() -> None:
     finally:
         database.engine.dispose()
 
+def refresh_gameweek(gameweek: int | None = None) -> None:
+    settings = get_settings(); database = Database(settings)
+    try:
+        with database.session_factory() as session:
+            result = GameweekBriefingService(OfficialFPLAdapter(base_url=settings.official_fpl_base_url, timeout_seconds=settings.official_fpl_timeout_seconds)).refresh(session, gameweek)
+        print(f"gameweek: {result.gameweek}"); print(f"pulses: {result.pulses_created} created, {result.pulses_updated} updated"); print(f"signals: {result.signals_created} created, {result.signals_resolved} resolved"); print(f"failures: {len(result.failures)}")
+    finally: database.engine.dispose()
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="FPL Intelligence operations")
-    parser.add_argument("command", choices=["sync-fpl-bootstrap"])
+    parser.add_argument("command", choices=["sync-fpl-bootstrap", "refresh-gameweek"])
+    parser.add_argument("--gameweek", type=int)
     args = parser.parse_args()
     if args.command == "sync-fpl-bootstrap":
         try:
             sync_fpl_bootstrap()
         except Exception as exc:
             parser.exit(1, f"FPL bootstrap sync failed: {exc}\n")
+    if args.command == "refresh-gameweek":
+        try: refresh_gameweek(args.gameweek)
+        except Exception as exc: parser.exit(1, f"Gameweek refresh failed: {exc}\n")
 
 
 if __name__ == "__main__":
