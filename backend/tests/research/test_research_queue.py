@@ -129,3 +129,30 @@ def test_queue_crosses_selected_player_guard_and_creates_deep_run(database):
         assert cycle_player.state == "researched"
         assert persisted.deep_run_id == deep_service.run_id
         assert session.get(ResearchDeepRun, deep_service.run_id) is not None
+
+
+class FailingDeepService:
+    def create_run(self, *_args, **_kwargs):
+        raise RuntimeError("app server unavailable")
+
+
+def test_queue_marks_cycle_partial_when_orchestration_handles_failure(database):
+    with database.session_factory() as session:
+        session.add(Player(id=4, display_name="Gabriel"))
+        session.commit()
+        queue = ResearchQueueService()
+        item = queue.add_player(session, player_id=4, source=ResearchQueueSource.USER)
+        queue.run(
+            session,
+            orchestrator=WeeklyResearchOrchestrator(deep_service=FailingDeepService()),
+            deep_service=None,
+            gameweek=1,
+            research_cutoff=datetime.now(timezone.utc),
+            limit=1,
+            item_ids=[item.id],
+        )
+
+        persisted = session.get(ResearchQueueItem, item.id)
+        cycle = session.get(ResearchCycle, persisted.cycle_id)
+        assert persisted.status == "failed"
+        assert cycle.status == "partial"

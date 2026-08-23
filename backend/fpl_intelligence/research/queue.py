@@ -65,7 +65,12 @@ class ResearchQueueService:
                 orchestrator.execute_selected_player(session,cycle.id,item.player_id,queue_context={"reason":item.reason,"source":item.source,"source_context":item.source_context,"research_situation_id":item.research_situation_id,"trigger_id":item.trigger_id})
                 cp=session.scalar(select(ResearchCyclePlayer).where(ResearchCyclePlayer.cycle_id==cycle.id,ResearchCyclePlayer.player_id==item.player_id))
                 item.cycle_id=cycle.id; item.cycle_player_id=cp.id; item.deep_run_id=cp.deep_run_id
-                item.status=ResearchQueueStatus.COMPLETED if cp.state==ResearchCyclePlayerState.RESEARCHED else ResearchQueueStatus.FAILED
+                if cp.state==ResearchCyclePlayerState.RESEARCHED:
+                    item.status=ResearchQueueStatus.COMPLETED
+                else:
+                    item.status=ResearchQueueStatus.FAILED
+                    cycle.status=ResearchCycleStatus.PARTIAL
+                    cycle.completed_at=datetime.now(timezone.utc)
                 session.commit()
             except Exception as exc:
                 # The queue is the durable owner of this lifecycle.  Preserve
