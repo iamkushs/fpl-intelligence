@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from fpl_intelligence.api.research import get_session
 from fpl_intelligence.decisions.service import DecisionError, DecisionService
 from fpl_intelligence.decisions.analysis import DecisionAnalysisError, DecisionAnalysisService
+from fpl_intelligence.decisions.selection import SelectionError, SelectionService
 from fpl_intelligence.squads.service import PairSquadService
 
 router = APIRouter(prefix="/fpl/decisions", tags=["decisions"])
@@ -29,6 +30,13 @@ class SelectInput(BaseModel):
     option_id: str
 class ResearchQueueInput(BaseModel):
     player_ids: list[int] | None = None
+class SelectionInput(BaseModel):
+    starting_xi_player_ids: list[int]
+    bench_player_ids_in_order: list[int]
+    captain_player_id: int
+    vice_captain_player_id: int
+class ApplySelectionInput(BaseModel):
+    analysis_run_id: str
 
 
 def _players(request: Request) -> dict[int, object]:
@@ -57,18 +65,24 @@ def _response(item, request: Request, session: Session) -> dict:
     for option in item.options:
         for movement in option.movements: relevant.update((movement.outgoing_player_id, movement.incoming_player_id))
     exposures = [] if exposure is None else [row for row in exposure["exposure"] if row["player"]["id"] in relevant]
-    analysis=DecisionAnalysisService(); latest=analysis.latest(session,item.id); gaps=analysis.gaps(session,item.id)
+    analysis=DecisionAnalysisService(); latest=analysis.latest(session,item.id); gaps=analysis.gaps(session,item.id); selection=SelectionService(); user_selection=session.query(__import__('fpl_intelligence.models',fromlist=['GameweekSelection']).GameweekSelection).filter_by(session_id=item.id).one_or_none()
     return {"id": item.id, "manager_id": item.manager_id, "manager_entry_id": item.manager.entry_id, "gameweek": item.gameweek,
             "snapshot_id": item.snapshot_id, "frozen_bank": item.frozen_bank, "status": item.status,
             "selected_option_id": item.selected_option_id, "finalized_option_id": item.finalized_option_id,
             "finalized_at": item.finalized_at, "frozen_squad": [{"player_id": pick.player_id, "squad_position": pick.squad_position,
             "selling_price": pick.selling_price, "player": _player(players.get(pick.player_id))} for pick in item.frozen_picks],
             "options": [_option(option, players) for option in item.options], "exposure": exposures, "research_gaps": gaps,
-            "latest_analysis": _analysis(latest), "analysis_history": [_analysis(row) for row in analysis.history(session,item.id)]}
+            "latest_analysis": _analysis(latest), "analysis_history": [_analysis(row) for row in analysis.history(session,item.id)],
+            "selection": None if user_selection is None else {"id":user_selection.id,"starting_xi_player_ids":user_selection.starting_xi_player_ids,"bench_player_ids_in_order":user_selection.bench_player_ids,"captain_player_id":user_selection.captain_player_id,"vice_captain_player_id":user_selection.vice_captain_player_id,"finalized_at":user_selection.finalized_at},
+            "latest_selection_analysis": _selection_analysis(selection.latest(session,item.id)), "selection_analysis_history": [_selection_analysis(row) for row in selection.history(session,item.id)]}
 
 def _analysis(row):
     if row is None: return None
     return {"id":row.id,"status":row.status,"outcome":row.outcome,"recommended_option_id":row.recommended_option_id,"confidence":row.confidence,"executive_summary":row.executive_summary,"key_tradeoffs":row.key_tradeoffs,"key_risks":row.key_risks,"contradictions":row.contradictions,"missing_information":row.missing_information,"what_could_change_decision":row.what_could_change_decision,"research_cutoff":row.research_cutoff,"created_at":row.created_at,"failure_reason":row.failure_reason}
+
+def _selection_analysis(row):
+    if row is None: return None
+    return {"id":row.id,"status":row.status,"outcome":row.outcome,"recommended_starting_xi_player_ids":row.recommended_starting_xi,"recommended_bench_player_ids_in_order":row.recommended_bench_order,"recommended_captain_player_id":row.recommended_captain_player_id,"recommended_vice_player_id":row.recommended_vice_player_id,"confidence":row.confidence,"executive_summary":row.executive_summary,"captaincy_reasoning":row.captaincy_reasoning,"lineup_reasoning":row.lineup_reasoning,"bench_reasoning":row.bench_reasoning,"key_risks":row.risks,"contradictions":row.contradictions,"missing_information":row.research_gaps,"what_could_change_decision":row.what_could_change_decision,"research_cutoff":row.research_cutoff,"created_at":row.created_at,"failure_reason":row.failure_reason}
 
 
 def _error(exc: Exception):
@@ -139,3 +153,33 @@ def analysis_history(session_id: str, session: Session = Depends(get_session)):
 def queue_decision_research(session_id: str, body: ResearchQueueInput, request: Request, session: Session = Depends(get_session)):
     try: DecisionAnalysisService().queue_gaps(session,session_id,body.player_ids); session.commit(); return _response(DecisionService().get(session,session_id),request,session)
     except (DecisionAnalysisError, DecisionError, LookupError, ValueError) as exc: session.rollback(); _error(exc)
+
+@router.post("/sessions/{session_id}/selection/analyze")
+def analyze_selection(session_id: str, request: Request, session: Session = Depends(get_session)):
+    try:
+        run=SelectionService().analyze(session,session_id,request.app.state.codex_service); session.commit(); return _selection_analysis(run)
+    except (SelectionError, DecisionError, LookupError) as exc: session.rollback(); _error(exc)
+
+@router.get("/sessions/{session_id}/selection/analysis")
+def latest_selection_analysis(session_id: str, session: Session = Depends(get_session)):
+    DecisionService().get(session,session_id); return _selection_analysis(SelectionService().latest(session,session_id))
+
+@router.get("/sessions/{session_id}/selection/history")
+def selection_history(session_id: str, session: Session = Depends(get_session)):
+    DecisionService().get(session,session_id); return [_selection_analysis(row) for row in SelectionService().history(session,session_id)]
+
+@router.put("/sessions/{session_id}/selection")
+def save_selection(session_id: str, body: SelectionInput, session: Session = Depends(get_session)):
+    try:
+        row=SelectionService().save(session,session_id,body.starting_xi_player_ids,body.bench_player_ids_in_order,body.captain_player_id,body.vice_captain_player_id); session.commit(); return {"id":row.id,"starting_xi_player_ids":row.starting_xi_player_ids,"bench_player_ids_in_order":row.bench_player_ids,"captain_player_id":row.captain_player_id,"vice_captain_player_id":row.vice_captain_player_id,"finalized_at":row.finalized_at}
+    except (SelectionError, DecisionError, LookupError) as exc: session.rollback(); _error(exc)
+
+@router.post("/sessions/{session_id}/selection/apply")
+def apply_selection(session_id: str, body: ApplySelectionInput, session: Session = Depends(get_session)):
+    try: row=SelectionService().apply(session,session_id,body.analysis_run_id); session.commit(); return {"id":row.id,"starting_xi_player_ids":row.starting_xi_player_ids,"bench_player_ids_in_order":row.bench_player_ids,"captain_player_id":row.captain_player_id,"vice_captain_player_id":row.vice_captain_player_id,"finalized_at":row.finalized_at}
+    except (SelectionError, DecisionError, LookupError) as exc: session.rollback(); _error(exc)
+
+@router.post("/sessions/{session_id}/selection/finalize")
+def finalize_selection(session_id: str, session: Session = Depends(get_session)):
+    try: row=SelectionService().finalize(session,session_id); session.commit(); return {"id":row.id,"finalized_at":row.finalized_at}
+    except (SelectionError, DecisionError, LookupError) as exc: session.rollback(); _error(exc)

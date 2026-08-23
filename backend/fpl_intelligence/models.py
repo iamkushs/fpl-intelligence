@@ -446,6 +446,7 @@ class DecisionSession(Base):
     snapshot: Mapped[FPLManagerGameweekSnapshot] = relationship()
     options: Mapped[list["DecisionOption"]] = relationship(back_populates="session", cascade="all, delete-orphan")
     frozen_picks: Mapped[list["DecisionSessionPick"]] = relationship(back_populates="session", cascade="all, delete-orphan", order_by="DecisionSessionPick.squad_position")
+    selection: Mapped["GameweekSelection | None"] = relationship(back_populates="session", cascade="all, delete-orphan", uselist=False)
 
 
 class DecisionSessionPick(Base):
@@ -458,6 +459,56 @@ class DecisionSessionPick(Base):
     selling_price: Mapped[int | None] = mapped_column(Integer)
     session: Mapped[DecisionSession] = relationship(back_populates="frozen_picks")
     player: Mapped[Player] = relationship()
+
+
+class GameweekSelection(Base):
+    """Explicit, user-owned pre-deadline XI.  It never submits to FPL."""
+    __tablename__ = "gameweek_selections"
+    __table_args__ = (UniqueConstraint("session_id", name="uq_gameweek_selection_session"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    session_id: Mapped[str] = mapped_column(ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    starting_xi_player_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    bench_player_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    captain_player_id: Mapped[int | None] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"))
+    vice_captain_player_id: Mapped[int | None] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"))
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    session: Mapped[DecisionSession] = relationship(back_populates="selection")
+
+
+class SelectionAnalysisStatus:
+    RUNNING = "running"; COMPLETED = "completed"; FAILED = "failed"; RESEARCH_REQUIRED = "research_required"
+
+
+class FPLSelectionAnalysisRun(Base):
+    __tablename__ = "fpl_selection_analysis_runs"
+    __table_args__ = (Index("ix_selection_analysis_session_status", "session_id", "status"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    session_id: Mapped[str] = mapped_column(ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default=SelectionAnalysisStatus.RUNNING)
+    outcome: Mapped[str] = mapped_column(String(24), nullable=False, default="unresolved")
+    research_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    recommended_starting_xi: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    recommended_bench_order: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    recommended_captain_player_id: Mapped[int | None] = mapped_column(Integer)
+    recommended_vice_player_id: Mapped[int | None] = mapped_column(Integer)
+    confidence: Mapped[str] = mapped_column(String(16), nullable=False, default="unresolved")
+    executive_summary: Mapped[str | None] = mapped_column(Text)
+    captaincy_reasoning: Mapped[str | None] = mapped_column(Text); lineup_reasoning: Mapped[str | None] = mapped_column(Text); bench_reasoning: Mapped[str | None] = mapped_column(Text)
+    risks: Mapped[list] = mapped_column(JSON, nullable=False, default=list); contradictions: Mapped[list] = mapped_column(JSON, nullable=False, default=list); research_gaps: Mapped[list] = mapped_column(JSON, nullable=False, default=list); what_could_change_decision: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    reasoning: Mapped[dict | None] = mapped_column(JSON); failure_reason: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True)); completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True)); created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SelectionAnalysisPlayerContext(Base):
+    __tablename__ = "selection_analysis_player_contexts"
+    __table_args__ = (UniqueConstraint("analysis_run_id", "player_id", name="uq_selection_analysis_context_player"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    analysis_run_id: Mapped[str] = mapped_column(ForeignKey("fpl_selection_analysis_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    synthesis_id: Mapped[str | None] = mapped_column(ForeignKey("research_player_syntheses.id", ondelete="SET NULL")); synthesis_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True)); research_state: Mapped[str | None] = mapped_column(String(16)); research_gap_state: Mapped[str] = mapped_column(String(16), nullable=False); relevant_dimension_facts: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
 
 class DecisionOption(Base):
