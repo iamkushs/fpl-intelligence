@@ -22,7 +22,11 @@ from fpl_intelligence.research.eval2_prompts import (
     EVAL2_COUNTER_SEARCH_PROMPT_VERSION,
     EVAL2_FRESHNESS_PROMPT_VERSION,
     EVAL2_REDDIT_RESEARCH_PROMPT_VERSION,
+    blind_spot_prompt,
     counter_search_prompt,
+    deep_player_research_prompt,
+    evidence_bundle_assessment_prompt,
+    final_player_synthesis_prompt,
     freshness_prompt,
     reddit_research_prompt,
 )
@@ -155,3 +159,14 @@ def test_prompt_contracts_include_quality_rules():
     assert "Do not make a transfer recommendation" in counter
     for outcome in ("still_current", "changed", "unresolved", "superseded"):
         assert outcome in freshness
+
+
+def test_production_prompt_envelopes_include_structured_contracts():
+    envelopes = [
+        deep_player_research_prompt(context={}),
+        blind_spot_prompt(context={}),
+        evidence_bundle_assessment_prompt(context={}),
+        final_player_synthesis_prompt(context={}),
+    ]
+
+    assert all(envelope.structured_output_contract for envelope in envelopes)

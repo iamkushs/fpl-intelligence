@@ -15,25 +15,29 @@ EVAL2_FINAL_PLAYER_SYNTHESIS_PROMPT_VERSION = "eval2_final_player_synthesis_v1"
 
 
 def deep_player_research_prompt(*, context: dict):
-    return PromptEnvelope(EVAL2_DEEP_PLAYER_RESEARCH_PROMPT_VERSION, "Research this PLAYER comprehensively as an FPL asset. Situation and trigger are context only; a trigger is never a recommendation. Preserve contradiction and uncertainty, do not fabricate evidence, do not write biography or transfer recommendations.\n" + json.dumps(context, default=str, sort_keys=True))
+    contract = {"research_scope": "string", "known_gaps": ["string"]}
+    return PromptEnvelope(EVAL2_DEEP_PLAYER_RESEARCH_PROMPT_VERSION, "Research this PLAYER comprehensively as an FPL asset. Situation and trigger are context only; a trigger is never a recommendation. Preserve contradiction and uncertainty, do not fabricate evidence, do not write biography or transfer recommendations.\n" + json.dumps(context, default=str, sort_keys=True), contract)
 
 
 def blind_spot_prompt(*, context: dict):
-    return PromptEnvelope(EVAL2_BLIND_SPOT_PROMPT_VERSION, "Identify at most five material research blind spots. Return exactly findings[]; each finding contains dimension (optional), category, question, why_it_matters, preferred_source_types[], suggested_queries[] (at most three). No generic filler or recommendations.\n" + json.dumps(context, default=str, sort_keys=True))
+    contract = {"findings": [{"dimension": "string|null", "category": "string", "question": "string", "why_it_matters": "string", "preferred_source_types": ["string"], "suggested_queries": ["string"]}]}
+    return PromptEnvelope(EVAL2_BLIND_SPOT_PROMPT_VERSION, "Identify at most five material research blind spots. Return exactly findings[]; each finding contains dimension (optional), category, question, why_it_matters, preferred_source_types[], suggested_queries[] (at most three). No generic filler or recommendations.\n" + json.dumps(context, default=str, sort_keys=True), contract)
 
 
 def final_player_synthesis_prompt(*, context: dict):
-    return PromptEnvelope(EVAL2_FINAL_PLAYER_SYNTHESIS_PROMPT_VERSION, "Produce durable PLAYER INTELLIGENCE, not a recommendation. Return exactly overall_research_state, executive_summary, dimension_summaries, key_strengths, key_risks, contradictions, missing_information, future_monitoring. Do not use buy, sell, transfer, hold, captain, bench, start, rank, or best option language.\n" + json.dumps(context, default=str, sort_keys=True))
+    contract = {"overall_research_state": "clear|mixed|thin|unresolved", "executive_summary": "string", "dimension_summaries": ["object"], "key_strengths": ["string"], "key_risks": ["string"], "contradictions": ["string"], "missing_information": ["string"], "future_monitoring": ["object"]}
+    return PromptEnvelope(EVAL2_FINAL_PLAYER_SYNTHESIS_PROMPT_VERSION, "Produce durable PLAYER INTELLIGENCE, not a recommendation. Return exactly overall_research_state, executive_summary, dimension_summaries, key_strengths, key_risks, contradictions, missing_information, future_monitoring. Do not use buy, sell, transfer, hold, captain, bench, start, rank, or best option language.\n" + json.dumps(context, default=str, sort_keys=True), contract)
 
 
 def evidence_bundle_assessment_prompt(*, context: dict):
+    contract = {"bundle_strength": "strong|adequate|thin|unresolved", "confidence": "high|medium|low|unresolved", "thesis": "string", "rationale": "string", "contradiction_summary": "string|null", "missing_information": ["string"]}
     return PromptEnvelope(version=EVAL2_EVIDENCE_BUNDLE_ASSESSMENT_PROMPT_VERSION, prompt=(
         "Assess this atomic research evidence bundle; do not recommend an FPL action, buy, sell, captain, or rank a player. "
         "Preserve contradictions, unknowns, provenance, cluster lineage, and superseded context. Derivative repetition is not independent confirmation. "
         "Return exactly JSON keys bundle_strength, confidence, thesis, rationale, contradiction_summary, missing_information. "
         "Allowed bundle_strength: strong, adequate, thin, unresolved. Allowed confidence: high, medium, low, unresolved. "
         "One direct official source can be highly informative. Zero evidence can only be thin/low or unresolved/unresolved.\n"
-        f"Bundle context: {json.dumps(context, default=str, sort_keys=True)}"))
+        f"Bundle context: {json.dumps(context, default=str, sort_keys=True)}"), structured_output_contract=contract)
 EVAL2_ATOMIC_EXTRACTION_PROMPT_VERSION = "eval2_atomic_evidence_extraction_v1"
 EVAL2_REDDIT_RESEARCH_PROMPT_VERSION = "eval2_reddit_research_v1"
 EVAL2_COUNTER_SEARCH_PROMPT_VERSION = "eval2_counter_search_v1"
