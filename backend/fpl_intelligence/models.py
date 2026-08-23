@@ -475,6 +475,51 @@ class DecisionOption(Base):
     movements: Mapped[list["DecisionMovement"]] = relationship(back_populates="option", cascade="all, delete-orphan", order_by="DecisionMovement.sequence")
 
 
+class DecisionAnalysisStatus:
+    PENDING = "pending"; RUNNING = "running"; COMPLETED = "completed"; FAILED = "failed"; RESEARCH_REQUIRED = "research_required"
+
+
+class DecisionAnalysisRun(Base):
+    """An immutable, research-cutoff-bound assessment of a decision session."""
+    __tablename__ = "decision_analysis_runs"
+    __table_args__ = (Index("ix_decision_analysis_runs_session_status", "session_id", "status"), Index("ix_decision_analysis_runs_recommended_option", "recommended_option_id"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    session_id: Mapped[str] = mapped_column(ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default=DecisionAnalysisStatus.PENDING)
+    research_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    recommended_option_id: Mapped[str | None] = mapped_column(ForeignKey("decision_options.id", ondelete="SET NULL"))
+    outcome: Mapped[str] = mapped_column(String(24), nullable=False, default="unresolved")
+    confidence: Mapped[str] = mapped_column(String(16), nullable=False, default="unresolved")
+    executive_summary: Mapped[str | None] = mapped_column(Text)
+    reasoning: Mapped[dict | None] = mapped_column(JSON)
+    key_tradeoffs: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    key_risks: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    contradictions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    missing_information: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    what_could_change_decision: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True)); completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now()); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    session: Mapped[DecisionSession] = relationship(); option_analyses: Mapped[list["DecisionOptionAnalysis"]] = relationship(back_populates="analysis_run", cascade="all, delete-orphan"); player_contexts: Mapped[list["DecisionAnalysisPlayerContext"]] = relationship(back_populates="analysis_run", cascade="all, delete-orphan")
+
+
+class DecisionOptionAnalysis(Base):
+    __tablename__ = "decision_option_analyses"
+    __table_args__ = (UniqueConstraint("analysis_run_id", "option_id", name="uq_decision_option_analysis"), Index("ix_decision_option_analyses_run", "analysis_run_id"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4())); analysis_run_id: Mapped[str] = mapped_column(ForeignKey("decision_analysis_runs.id", ondelete="CASCADE"), nullable=False); option_id: Mapped[str] = mapped_column(ForeignKey("decision_options.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="assessed"); summary: Mapped[str | None] = mapped_column(Text); strengths: Mapped[list] = mapped_column(JSON, nullable=False, default=list); weaknesses: Mapped[list] = mapped_column(JSON, nullable=False, default=list); risks: Mapped[list] = mapped_column(JSON, nullable=False, default=list); research_gaps: Mapped[list] = mapped_column(JSON, nullable=False, default=list); exposure_change: Mapped[dict | None] = mapped_column(JSON); squad_effect: Mapped[dict | None] = mapped_column(JSON); created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    analysis_run: Mapped[DecisionAnalysisRun] = relationship(back_populates="option_analyses")
+
+
+class DecisionAnalysisPlayerContext(Base):
+    __tablename__ = "decision_analysis_player_contexts"
+    __table_args__ = (UniqueConstraint("analysis_run_id", "player_id", "role", name="uq_decision_analysis_player_role"), Index("ix_decision_analysis_player_context_run", "analysis_run_id"), Index("ix_decision_analysis_player_context_player", "player_id"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4())); analysis_run_id: Mapped[str] = mapped_column(ForeignKey("decision_analysis_runs.id", ondelete="CASCADE"), nullable=False); player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    role: Mapped[str] = mapped_column(String(24), nullable=False); synthesis_id: Mapped[str | None] = mapped_column(ForeignKey("research_player_syntheses.id", ondelete="SET NULL")); synthesis_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True)); overall_research_state: Mapped[str | None] = mapped_column(String(16)); freshness_state: Mapped[str] = mapped_column(String(16), nullable=False); research_gap_state: Mapped[str] = mapped_column(String(16), nullable=False); research_gap_reasons: Mapped[list] = mapped_column(JSON, nullable=False, default=list); created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    analysis_run: Mapped[DecisionAnalysisRun] = relationship(back_populates="player_contexts")
+
+
 class DecisionMovement(Base):
     __tablename__ = "decision_movements"
     __table_args__ = (UniqueConstraint("option_id", "sequence", name="uq_decision_movement_sequence"),)
