@@ -38,6 +38,9 @@ class DecisionService:
         result = session.scalar(select(DecisionSession).where(DecisionSession.id == session_id).options(selectinload(DecisionSession.manager), selectinload(DecisionSession.frozen_picks), selectinload(DecisionSession.options).selectinload(DecisionOption.movements)))
         if result is None:
             raise LookupError("decision_session_not_found")
+        # Options may have been appended by their foreign key in this same unit
+        # of work; refresh this collection before producing an aggregate.
+        session.expire(result, ["options"])
         return result
 
     def list(self, session: Session, manager_id: int | None = None) -> list[DecisionSession]:

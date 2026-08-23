@@ -42,7 +42,9 @@ class DecisionAnalysisService:
         for context in packet["research_context"]:
             for role in context["roles"]: db.add(DecisionAnalysisPlayerContext(analysis_run_id=run.id,player_id=context["player_id"],role=role,synthesis_id=context["synthesis_id"],synthesis_cutoff=context["synthesis_cutoff"],overall_research_state=context["overall_research_state"],freshness_state=context["freshness_state"],research_gap_state=context["research_gap_state"],research_gap_reasons=context["research_gap_reasons"]))
         prompt="""You analyze only supplied legal FPL plans. Return JSON only with outcome (recommend_option|research_required|unresolved), recommended_option_id (or null), confidence (high|medium|low|unresolved), executive_summary, key_tradeoffs, key_risks, contradictions, missing_information, what_could_change_decision, option_analyses. Do not invent facts, browse, estimate points, use scores, or select a plan. A recommendation must name a supplied legal option.\n"""+json.dumps(packet,default=str)
-        try: data=json.loads(codex.execute(prompt=prompt).final_text)
+        try:
+            data=json.loads(codex.execute(prompt=prompt).final_text)
+            if not isinstance(data, dict): raise ValueError("model output must be an object")
         except Exception as exc: run.status=DecisionAnalysisStatus.FAILED; run.failure_reason="Model output could not be parsed."; run.completed_at=datetime.now(timezone.utc); db.flush(); raise DecisionAnalysisError("decision_analysis_model_failed") from exc
         outcome=data.get("outcome"); rec=data.get("recommended_option_id"); legal={o["id"] for o in packet["legal_options"]}
         if outcome not in ("recommend_option","research_required","unresolved") or (outcome=="recommend_option" and rec not in legal) or (outcome!="recommend_option" and rec is not None): run.status=DecisionAnalysisStatus.FAILED; run.failure_reason="Model returned an invalid recommendation."; db.flush(); raise DecisionAnalysisError("invalid_decision_analysis_output")
