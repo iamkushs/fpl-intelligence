@@ -39,25 +39,26 @@ class WeeklyResearchOrchestrator:
         for item in cycle.players:
             item.triggers=list(by_player.get(item.player_id,[])); item.selected_for_deep_research=False;item.queue_rank=None
             item.state=ResearchCyclePlayerState.TRIGGERED if item.triggers else ResearchCyclePlayerState.MONITORED
-        candidates=[item for item in cycle.players if item.triggers]
-        candidates.sort(key=lambda item:(-max(trigger.priority for trigger in item.triggers),min(trigger.created_at for trigger in item.triggers),not bool(item.watchlist_entry_id and session.get(WatchlistEntry,item.watchlist_entry_id).pinned),item.player_id))
-        for rank,item in enumerate(candidates,1):
+        # Triggers are attention signals only. Explicit ResearchQueue operations
+        # are the sole authority for selecting deep-research players.
+        for item in cycle.players:
             item.selection_reason=[{"trigger_id":trigger.id,"priority":trigger.priority,"description":trigger.description} for trigger in item.triggers]
-            if rank<=cycle.max_deep_runs:item.state=ResearchCyclePlayerState.SELECTED;item.selected_for_deep_research=True;item.queue_rank=rank
-            else:item.state=ResearchCyclePlayerState.DEFERRED
+            item.selected_for_deep_research=False; item.queue_rank=None
+            if item.triggers: item.state=ResearchCyclePlayerState.TRIGGERED
         cycle.status=ResearchCycleStatus.PREPARED;cycle.prepared_at=datetime.now(timezone.utc);session.commit();return self.get_cycle(session,cycle.id)
-    def execute_selected_player(self,session,cycle_id,player_id):
+    def execute_selected_player(self,session,cycle_id,player_id,*,queue_context=None):
         cycle=self.get_cycle(session,cycle_id); item=next((x for x in cycle.players if x.player_id==player_id),None)
         if not item or not item.selected_for_deep_research: raise ValueError("Player is not selected for this cycle")
         if item.state==ResearchCyclePlayerState.RESEARCHED:return cycle
         if self.deep_service is None: raise ValueError("Deep research service is unavailable")
         item.state=ResearchCyclePlayerState.RESEARCHING;cycle.status=ResearchCycleStatus.EXECUTING;cycle.started_at=cycle.started_at or datetime.now(timezone.utc);session.commit()
         try:
-            primary=max(item.triggers,key=lambda x:(x.priority,-x.created_at.timestamp(),x.id))
+            primary=max(item.triggers,key=lambda x:(x.priority,-x.created_at.timestamp(),x.id),default=None)
             run=session.get(ResearchDeepRun,item.deep_run_id) if item.deep_run_id else None
             if run is None:
-                thread=ResearchThread(title=f"GW{cycle.gameweek} weekly player research",thread_type=ResearchThreadType.PLAYER,question="Weekly trigger-led research") ;session.add(thread);session.commit()
-                run=self.deep_service.create_run(session,thread_id=thread.id,player_id=item.player_id,research_cutoff=cycle.research_cutoff,situation_id=primary.situation_id,trigger_id=primary.id);item.deep_run_id=run.id
+                context=queue_context or {}
+                thread=ResearchThread(title=f"GW{cycle.gameweek} queued player research",thread_type=ResearchThreadType.PLAYER,question=context.get("reason") or "User-requested comprehensive player research") ;session.add(thread);session.commit()
+                run=self.deep_service.create_run(session,thread_id=thread.id,player_id=item.player_id,research_cutoff=cycle.research_cutoff,situation_id=primary.situation_id if primary else context.get("research_situation_id"),trigger_id=primary.id if primary else context.get("trigger_id"));item.deep_run_id=run.id
             run=self.deep_service.execute_full_run(session,run.id);item.state=ResearchCyclePlayerState.RESEARCHED
             now=datetime.now(timezone.utc)
             for trigger in item.triggers:

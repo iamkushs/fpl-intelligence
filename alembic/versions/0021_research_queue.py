@@ -1,0 +1,14 @@
+"""add explicit user-controlled research queue"""
+from alembic import op
+import sqlalchemy as sa
+revision="0021_research_queue"; down_revision="0020_canonical_fpl_bootstrap"; branch_labels=None; depends_on=None
+def upgrade():
+    op.create_table("research_queue_items",
+        sa.Column("id",sa.String(36),primary_key=True), sa.Column("player_id",sa.Integer(),sa.ForeignKey("players.id",ondelete="RESTRICT"),nullable=False),
+        sa.Column("status",sa.String(16),nullable=False,server_default="queued"), sa.Column("source",sa.String(32),nullable=False), sa.Column("reason",sa.Text()), sa.Column("queue_order",sa.Integer(),nullable=False), sa.Column("requested_gameweek",sa.Integer()), sa.Column("snoozed_until_gameweek",sa.Integer()), sa.Column("source_context",sa.JSON()),
+        sa.Column("trigger_id",sa.String(36),sa.ForeignKey("player_research_triggers.id",ondelete="SET NULL")), sa.Column("research_situation_id",sa.String(36),sa.ForeignKey("research_situations.id",ondelete="SET NULL")), sa.Column("cycle_id",sa.String(36),sa.ForeignKey("research_cycles.id",ondelete="SET NULL")), sa.Column("cycle_player_id",sa.String(36),sa.ForeignKey("research_cycle_players.id",ondelete="SET NULL")), sa.Column("deep_run_id",sa.String(36),sa.ForeignKey("research_deep_runs.id",ondelete="SET NULL")),
+        sa.Column("created_at",sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()), sa.Column("updated_at",sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()), sa.Column("queued_at",sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()),
+        sa.CheckConstraint("status IN ('queued','running','completed','failed','removed','snoozed')",name="ck_research_queue_status"), sa.CheckConstraint("source IN ('user','decision_center','accepted_signal','research_monitoring')",name="ck_research_queue_source"))
+    op.create_index("ix_research_queue_items_player_id","research_queue_items",["player_id"]); op.create_index("ix_research_queue_items_status","research_queue_items",["status"]); op.create_index("ix_research_queue_items_queue_order","research_queue_items",["queue_order"]); op.create_index("ix_research_queue_active_order","research_queue_items",["status","queue_order"]); op.create_index("ix_research_queue_player_status","research_queue_items",["player_id","status"])
+def downgrade():
+    op.drop_index("ix_research_queue_player_status",table_name="research_queue_items"); op.drop_index("ix_research_queue_active_order",table_name="research_queue_items"); op.drop_index("ix_research_queue_items_queue_order",table_name="research_queue_items"); op.drop_index("ix_research_queue_items_status",table_name="research_queue_items"); op.drop_index("ix_research_queue_items_player_id",table_name="research_queue_items"); op.drop_table("research_queue_items")

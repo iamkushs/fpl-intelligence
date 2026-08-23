@@ -12,6 +12,7 @@ from fpl_intelligence.api.decisions import router as decisions_router
 from fpl_intelligence.api.research import router as research_router
 from fpl_intelligence.api.watchlist import router as watchlist_router
 from fpl_intelligence.api.triggers import router as triggers_router
+from fpl_intelligence.api.research_queue import router as research_queue_router
 from fpl_intelligence.codex.service import CodexService
 from fpl_intelligence.config import Settings, get_settings
 from fpl_intelligence.db.session import Database
@@ -112,6 +113,7 @@ def create_app(
     app.include_router(decisions_router)
     app.include_router(watchlist_router)
     app.include_router(triggers_router)
+    app.include_router(research_queue_router)
 
     @app.get("/health", tags=["system"])
     def health():

@@ -1342,3 +1342,23 @@ class ResearchDocument(Base):
     research_section: Mapped[ResearchSection | None] = relationship(
         back_populates="documents", foreign_keys=[research_section_id]
     )
+
+
+class ResearchQueueStatus:
+    QUEUED = "queued"; RUNNING = "running"; COMPLETED = "completed"; FAILED = "failed"; REMOVED = "removed"; SNOOZED = "snoozed"
+    ACTIVE = frozenset({QUEUED, RUNNING, SNOOZED})
+
+class ResearchQueueSource:
+    USER = "user"; DECISION_CENTER = "decision_center"; ACCEPTED_SIGNAL = "accepted_signal"; RESEARCH_MONITORING = "research_monitoring"
+
+class ResearchQueueItem(Base):
+    __tablename__ = "research_queue_items"
+    __table_args__ = (CheckConstraint("status IN ('queued','running','completed','failed','removed','snoozed')", name="ck_research_queue_status"), CheckConstraint("source IN ('user','decision_center','accepted_signal','research_monitoring')", name="ck_research_queue_source"), Index("ix_research_queue_active_order", "status", "queue_order"), Index("ix_research_queue_player_status", "player_id", "status"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=ResearchQueueStatus.QUEUED, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False); reason: Mapped[str | None] = mapped_column(Text)
+    queue_order: Mapped[int] = mapped_column(Integer, nullable=False, index=True); requested_gameweek: Mapped[int | None] = mapped_column(Integer); snoozed_until_gameweek: Mapped[int | None] = mapped_column(Integer)
+    source_context: Mapped[dict | None] = mapped_column(JSON); trigger_id: Mapped[str | None] = mapped_column(ForeignKey("player_research_triggers.id", ondelete="SET NULL")); research_situation_id: Mapped[str | None] = mapped_column(ForeignKey("research_situations.id", ondelete="SET NULL")); cycle_id: Mapped[str | None] = mapped_column(ForeignKey("research_cycles.id", ondelete="SET NULL")); cycle_player_id: Mapped[str | None] = mapped_column(ForeignKey("research_cycle_players.id", ondelete="SET NULL")); deep_run_id: Mapped[str | None] = mapped_column(ForeignKey("research_deep_runs.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now()); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()); queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    player: Mapped[Player] = relationship()
