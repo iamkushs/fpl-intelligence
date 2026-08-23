@@ -115,7 +115,19 @@ def _validate_url(value: str) -> None:
 
 def _response_text(response: Any) -> str:
     value = getattr(response, "text", "")
-    return value() if callable(value) else str(value or "")
+    value = value() if callable(value) else value
+    text = _as_text(value)
+    if text.strip():
+        return text
+    # Scrapling 0.4.x stores fetched markup in ``body`` while its TextHandler
+    # can be empty.  Prefer normal text, but use that byte body when needed.
+    return _as_text(getattr(response, "body", b""))
+
+
+def _as_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value or "")
 
 
 def _response_headers(response: Any) -> dict[str, str]:
