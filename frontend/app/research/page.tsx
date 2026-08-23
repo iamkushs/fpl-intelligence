@@ -1,0 +1,13 @@
+"use client";
+import {useEffect,useState} from "react";
+const api=process.env.NEXT_PUBLIC_API_BASE_URL??"http://127.0.0.1:8000";
+type Item={id:string;player_id:number;player_name:string;status:string;source:string;reason?:string;queue_order:number;snoozed_until_gameweek?:number};
+type Signal={id:string;player_id:number;signal_type:string;reason:string;source:string;already_queued:boolean;gameweek?:number};
+export default function ResearchPage(){const [d,setD]=useState<any>({queue:[],snoozed:[],recent_research:[],attention_signals:[]});
+ const load=()=>fetch(`${api}/fpl/research-center`).then(r=>r.json()).then(setD); useEffect(()=>{void load()},[]);
+ async function post(path:string,body?:unknown){await fetch(`${api}${path}`,{method:"POST",headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined});load()}
+ const executable=d.queue.filter((x:Item)=>x.status==="queued").length; const run=Math.min(executable,15);
+ return <main className="shell"><p><a href="/">FPL Intelligence</a></p><h1>Research Center</h1><p className="muted">Weekly research operations. Research is comprehensive and non-prescriptive.</p>
+ <section><header><h2>Deep Research Queue ({d.queue.length})</h2><button disabled={!run} onClick={()=>post("/fpl/research-queue/run",{limit:run})}>Run next {run}</button></header>{d.queue.length?d.queue.map((x:Item,i:number)=><article key={x.id}><strong>{i+1}. {x.player_name}</strong><p>{x.source}{x.reason?` · ${x.reason}`:""} · <b>{x.status}</b></p>{x.status==="queued"&&<><button onClick={()=>post(`/fpl/research-queue/${x.id}/snooze`,{until_gameweek:1})}>Snooze</button><button onClick={()=>post(`/fpl/research-queue/${x.id}/remove`)}>Remove</button></>}{x.status==="snoozed"&&<button onClick={()=>post(`/fpl/research-queue/${x.id}/unsnooze`)}>Unsnooze</button>}{x.status==="failed"&&<button onClick={()=>post(`/fpl/research-queue/${x.id}/retry`)}>Retry</button>}</article>):<p>No players queued.</p>}</section>
+ <section><h2>Attention Signals</h2>{d.attention_signals.map((s:Signal)=><article key={s.id}><strong>Player {s.player_id} · {s.signal_type}</strong><p>{s.reason} · {s.source}{s.gameweek?` · GW${s.gameweek}`:""}</p>{s.already_queued?<span>Queued</span>:<button onClick={()=>post(`/fpl/research-signals/${s.id}/queue`)}>Add to queue</button>}</article>)}</section>
+ <section><h2>Watchlist Monitoring</h2><p className="muted">Recent PlayerGameweekPulse summaries appear when available.</p></section><section><h2>Recently Researched</h2>{d.recent_research.map((x:Item)=><p key={x.id}><a href={`/players/${x.player_id}`}>{x.player_name}</a> · {x.status}</p>)}</section><section><h2>Recent Runs</h2><p className="muted">No recent durable runs reported.</p></section></main>}

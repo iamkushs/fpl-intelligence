@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { QueueResearchAction } from "../../queue-research-action";
 
 type WatchlistState = { active: boolean; pinned: boolean };
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -24,7 +25,7 @@ export function WatchlistAction({ playerId, initial }: { playerId: number; initi
     finally { setBusy(false); }
   }
 
-  return <div className="research-action">
+  return <div className="research-action"><QueueResearchAction playerId={playerId} />
     <button onClick={() => mutate("membership")} disabled={busy}>{state.active ? "Remove from Watchlist" : "Add to Watchlist"}</button>
     {state.active && <button onClick={() => mutate("pin")} disabled={busy}>{state.pinned ? "Unpin" : "Pin"}</button>}
     {message && <p className="action-message" role="status">{message}</p>}

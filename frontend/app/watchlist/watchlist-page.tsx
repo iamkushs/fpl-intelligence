@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { PlayerOption, WatchlistEntry, WatchlistSuggestion } from "./page";
+import { QueueResearchAction } from "../queue-research-action";
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 export const STALE_RESEARCH_DAYS = 14;
@@ -146,7 +147,7 @@ export function WatchlistPage({ initialEntries, initialSuggestions }: { initialE
       <div className="player-line"><span className="position-badge">{entry.position}</span><div><h2><Link href={`/players/${entry.player_id}`}>{entry.player_name}</Link>{entry.pinned && <span className="pin-mark" title="Pinned"> ◆</span>}</h2><p>{entry.club} · £{entry.price.toFixed(1)}m</p></div></div>
       <div className="watch-context"><span className="thread-tag">{entry.added_source}</span>{entry.research_needed && <span className="trigger-badge">Needs research</span>}<p>{entry.research_needed ? entry.primary_trigger_reason : entry.addition_reason ?? "No addition reason recorded."}</p><p>{entry.research_needed ? `${entry.open_trigger_count} open trigger${entry.open_trigger_count === 1 ? "" : "s"} · ${entry.primary_trigger_source}` : `Added ${formattedDate(entry.added_at)}`}</p></div>
       <div className={`freshness ${!entry.last_research_at || ageInDays(entry.last_research_at) > STALE_RESEARCH_DAYS ? "needs-research" : ""}`} title={entry.last_research_at ? `Last researched ${formattedDate(entry.last_research_at)}` : undefined}>{freshness(entry.last_research_at)}</div>
-      <div className="row-actions"><Link className="text-action" href={`/players/${entry.player_id}`}>View research</Link><button className="quiet-button" disabled={busy === entry.player_id} onClick={() => action(entry, "pin")}>{entry.pinned ? "Unpin" : "Pin"}</button><button className="danger-button" disabled={busy === entry.player_id} onClick={() => action(entry, "remove")}>Remove</button></div>
+      <div className="row-actions"><QueueResearchAction playerId={entry.player_id}/><Link className="text-action" href={`/players/${entry.player_id}`}>View research</Link><button className="quiet-button" disabled={busy === entry.player_id} onClick={() => action(entry, "pin")}>{entry.pinned ? "Unpin" : "Pin"}</button><button className="danger-button" disabled={busy === entry.player_id} onClick={() => action(entry, "remove")}>Remove</button></div>
     </article>)}</div> : <div className="empty"><h2>No matching players</h2><p>These filters do not match the current Watchlist.</p><button onClick={reset}>Reset filters</button></div>}</>}
     {!entries.length && <div className="empty watchlist-empty"><h2>Your Watchlist is empty</h2><p>Add persisted FPL players who are interesting enough to monitor. This does not mark them as immediate transfer targets.</p></div>}
   </main>;
